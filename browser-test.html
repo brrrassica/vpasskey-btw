@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>passkey-tpm Chrome test</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  button { font-size: 1rem; padding: .5rem 1rem; margin-right: .5rem; }
+  #log { background: #111; color: #0f0; padding: 1rem; white-space: pre-wrap; border-radius: 6px; }
+  .ok { color: #6c6; } .bad { color: #f66; }
+</style>
+</head>
+<body>
+<h1>passkey-tpm &mdash; Chrome passkey test</h1>
+<p>Support probes:</p>
+<ul id="probes"><li>running...</li></ul>
+<p>
+  <button id="register">1. Register passkey</button>
+  <button id="auth">2. Authenticate</button>
+</p>
+<p>When Chrome asks where to save the passkey, choose <strong>Use a security key</strong>
+(USB security key) and touch the fingerprint reader.</p>
+<div id="log"></div>
+
+<script>
+const logEl = document.getElementById('log');
+const log = (m) => { logEl.textContent += m + "\n"; };
+const probes = document.getElementById('probes');
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
+
+let savedId = null;
+let savedUser = null;
+
+async function probe() {
+  probes.innerHTML = '';
+  const add = (label, value, good) => {
+    const li = document.createElement('li');
+    li.innerHTML = label + ': <span class="' + (good ? 'ok' : 'bad') + '">' + value + '</span>';
+    probes.appendChild(li);
+  };
+  const has = !!window.PublicKeyCredential;
+  add('WebAuthn (PublicKeyCredential)', has ? 'yes' : 'no', has);
+  if (has) {
+    try {
+      const uvpa = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+      add('User-verifying platform authenticator', uvpa ? 'yes' : 'no (Linux)', uvpa);
+    } catch (e) { add('UVPA probe', String(e), false); }
+    try {
+      const cma = await PublicKeyCredential.isConditionalMediationAvailable();
+      add('Conditional mediation (autofill)', cma ? 'yes' : 'no', cma);
+    } catch (e) { add('Conditional mediation probe', String(e), false); }
+  }
+}
+
+document.getElementById('register').onclick = async () => {
+  try {
+    savedUser = rand(16);
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: rand(32),
+      rp: { id: location.hostname, name: 'passkey-tpm test' },
+      user: { id: savedUser, name: 'sam', displayName: 'Sam' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+      timeout: 60000,
+      attestation: 'none',
+    }});
+    savedId = b64(cred.rawId);
+    log('[register] OK  id=' + savedId.slice(0, 24) + '...  (touch worked)');
+  } catch (e) {
+    log('[register] FAIL ' + e.name + ': ' + e.message);
+  }
+};
+
+document.getElementById('auth').onclick = async () => {
+  if (!savedId) { log('[auth] register first in this page'); return; }
+  try {
+    const assertion = await navigator.credentials.get({ publicKey: {
+      challenge: rand(32),
+      rpId: location.hostname,
+      allowCredentials: [{ type: 'public-key', id: unb64(savedId) }],
+      userVerification: 'required',
+      timeout: 60000,
+    }});
+    log('[auth] OK  signed ' + assertion.response.signature.byteLength + ' bytes  (touch worked)');
+  } catch (e) {
+    log('[auth] FAIL ' + e.name + ': ' + e.message);
+  }
+};
+
+log('page loaded. origin=' + location.origin);
+probe();
+</script>
+</body>
+</html>

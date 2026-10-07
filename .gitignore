@@ -1,0 +1,9 @@
+# Upstream authenticator, cloned by install.sh — not part of this repo
+/passkey-tpm/
+
+# Build output
+target/
+dist/
+
+# Logs and scratch
+*.log
