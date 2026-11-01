@@ -44,6 +44,12 @@ sudo chown root:root \
 	/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules \
 	/usr/lib/sysusers.d/passkey-tpm.conf \
 	/usr/lib/modules-load.d/passkey-tpm.conf
+# cp -a preserves the staging tree's ownership, so the directories created
+# above are owned by the invoking user until chowned here.
+sudo chown -R root:root \
+	/usr/lib/passkey-tpm \
+	/usr/share/doc/passkey-tpm \
+	/usr/share/licenses/passkey-tpm
 
 log "Creating broker user (passkey-tpm, member of tss)"
 sudo systemd-sysusers /usr/lib/sysusers.d/passkey-tpm.conf
