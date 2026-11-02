@@ -8,10 +8,12 @@ upstream pin from [`versions.env`](../versions.env):
 3. Commit the result in the checkout so the next install's dirty-tree guard still sees a
    clean working tree. The files here, not that local commit, are the source of truth.
 
-The pin (`v0.1.0-brrr1`) already contains this series, so `install.sh` detects
-the applied marker files and skips the patches. They remain as the reference
-series for older pristine pins; the pin itself still keeps its SHA integrity
-check.
+The pin (`v0.1.0-brrr1`) already contains patches 0001–0003, so `install.sh`
+checks a per-patch marker and skips only the patches already in the tree. Patch
+0004 is newer than the pin and is applied on top of it. The series remains the
+reference for older pristine pins, and the pin itself still keeps its SHA
+integrity check. When you add a patch, add its marker check to the
+`patch_marker` function in [`install.sh`](../install.sh:189) and list it here.
 
 ## Current series
 
@@ -52,6 +54,18 @@ check.
   - Packaging: `packaging/polkit/io.github.dangerousplay.PasskeyTpm1.policy`,
     installed by `cargo xtask dist`; the wrapper's install/uninstall lists are
     updated.
+- `0004-0.2.0-credprotect-enforcement.patch`
+ - M3.3: `enforceCredentialProtectionPolicy` is no longer ignored. It is
+   type-checked, and `true` without `credProtect` returns
+   `CTAP2_ERR_INVALID_OPTION` (CTAP 2.1 §6.1.3).
+ - M3.3: a `true` flag with a policy stays valid because every credential is
+   already created at `credProtect` level 3, which satisfies any requested
+   level. No credential is ever created at a weaker level.
+ - M3.3: tests pin levels 1/2/3 upgrading to 3, out-of-range and wrong-typed
+   values, and that a protected credential is never signed without UV (no
+   presence-only signature, no silent assertion).
+ - Marker: `enforceCredentialProtectionPolicy` in
+   `crates/core/src/ctap2/make_credential.rs`.
 
 ## Refreshing a patch
 

@@ -53,8 +53,10 @@ items.
   detached to the pinned commit instead of being reused blindly, and the fetched
   ref must resolve to the pinned SHA unless a development ref is overridden.
 - Local fixes are carried as a tracked patch series in `patches/`. The fork
-  release `v0.1.0-brrr1` already contains the series, so `install.sh` detects it
-  and skips applying the patches; an older pristine pin still gets them.
+  release `v0.1.0-brrr1` already contains patches 0001–0003, so `install.sh`
+  checks a marker per patch and skips only those already in the tree. An older
+  pristine pin still gets the whole series, and a patch newer than the pin
+  (currently 0004) is applied on top.
 - The installer installs each staged file with explicit `root:root` ownership
   and modes instead of copying a staging tree, which previously could stamp the
   invoking user's ownership onto shared system directories.
@@ -73,6 +75,9 @@ items.
   install and an upgrade install both build the pinned commit.
 - `install.sh` no longer leaves `/usr/bin/passkey-tpm-tray` unmanaged or
   user-owned.
+- `enforceCredentialProtectionPolicy` is validated instead of silently ignored;
+  a `true` flag without a `credProtect` policy now returns
+  `CTAP2_ERR_INVALID_OPTION`.
 
 ### Upgrade notes
 

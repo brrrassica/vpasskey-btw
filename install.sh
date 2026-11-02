@@ -132,7 +132,7 @@ libexecdir:       $LIBEXECDIR
 Would sync the source checkout (clone/fetch/checkout as needed).
 EOF
 	while IFS= read -r patch; do
-		[[ -n "$patch" ]] && printf 'Would ensure patch (skipped if already in the pin): %s\n' "$patch"
+		[[ -n "$patch" ]] && printf 'Would ensure patch (skipped only if already in the tree): %s\n' "$patch"
 	done < <(patch_files)
 	cat <<EOF
 Would build release binaries and stage a dist tree.
@@ -186,25 +186,45 @@ sync_source() {
 	fi
 }
 
-# The fork release v0.1.0-brrr1 already carries this series. A marker file
-# created by the last patch distinguishes that case, so an older pristine pin
-# still gets the patches while the pinned fork tag does not get them twice.
-patches_already_applied() {
-	[[ -e "$SRC/crates/uv/src/polkit.rs" ]]
+# The pinned fork release already carries most of this series, and a later
+# patch might not be in the pin yet. Each patch therefore has its own marker:
+# the bit of tree it produces. Checking markers per patch (rather than one
+# all-or-nothing marker) lets a pin that already has 0001..0003 receive a new
+# 0004 without replaying the old patches. When you add a patch, add its marker
+# here and to patches/README.md.
+patch_marker() {
+	case "$(basename "$1")" in
+		0001-*)
+			[[ -e "$SRC/crates/agent/src/prompt.rs" ]]
+			;;
+		0002-*)
+			grep -q 'uvModality' "$SRC/crates/core/src/ctap2/info.rs"
+			;;
+		0003-*)
+			[[ -e "$SRC/crates/uv/src/polkit.rs" ]]
+			;;
+		0004-*)
+			grep -q 'enforceCredentialProtectionPolicy' \
+				"$SRC/crates/core/src/ctap2/make_credential.rs"
+			;;
+		*)
+			return 1
+			;;
+	esac
 }
 
-# Apply the tracked local patch series on top of a pristine upstream
-# checkout, then commit it so the next run's dirty-checkout guard still sees a
-# clean tree. The files under patches/ remain the source of truth.
+# Apply the tracked local patch series, then commit it so the next run's
+# dirty-checkout guard still sees a clean tree. The files under patches/ remain
+# the source of truth.
 apply_patches() {
 	local patch
 
-	if patches_already_applied; then
-		log "Patch series already present in ${COMMIT:-$REF}; nothing to apply"
-		return 0
-	fi
 	while IFS= read -r patch; do
 		[[ -n "$patch" ]] || continue
+		if patch_marker "$patch"; then
+			log "Already present in ${COMMIT:-$REF}: $(basename "$patch")"
+			continue
+		fi
 		log "Applying $(basename "$patch")"
 		if ! git -C "$SRC" apply --check "$patch"; then
 			die "$(basename "$patch") does not apply to ${COMMIT:-$REF}; refresh the patch series"
