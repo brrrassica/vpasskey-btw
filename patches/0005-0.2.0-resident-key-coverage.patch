@@ -1,0 +1,288 @@
+diff --git a/crates/core/src/ctap2/get_assertion.rs b/crates/core/src/ctap2/get_assertion.rs
+index 22fd49d..d327f35 100644
+--- a/crates/core/src/ctap2/get_assertion.rs
++++ b/crates/core/src/ctap2/get_assertion.rs
+@@ -129,23 +129,27 @@ impl<T: TpmOps> Authenticator<T> {
+             if ids.len() > MAX_CREDENTIAL_COUNT_IN_LIST {
+                 return Err(status::LIMIT_EXCEEDED);
+             }
+-            for id in ids {
+-                if let Some(blobs) = self
+-                    .tpm
+-                    .open_credential_id(uid, rp_id_hash, id)
+-                    .map_err(map_tpm_error)?
+-                {
+-                    return Ok((
+-                        vec![Found {
+-                            id: id.to_vec(),
+-                            blobs,
+-                            user: None,
+-                        }],
+-                        false,
+-                    ));
++            // An empty allowList means "no restriction" (WebAuthn L3 §5.1.3): fall
++            // through to the discoverable path instead of returning NO_CREDENTIALS.
++            if !ids.is_empty() {
++                for id in ids {
++                    if let Some(blobs) = self
++                        .tpm
++                        .open_credential_id(uid, rp_id_hash, id)
++                        .map_err(map_tpm_error)?
++                    {
++                        return Ok((
++                            vec![Found {
++                                id: id.to_vec(),
++                                blobs,
++                                user: None,
++                            }],
++                            false,
++                        ));
++                    }
+                 }
++                return Ok((Vec::new(), false));
+             }
+-            return Ok((Vec::new(), false));
+         }
+         let entries = self.tpm.resident_entries(uid).map_err(map_tpm_error)?;
+         let mut found = Vec::new();
+diff --git a/crates/core/src/ctap2/tests.rs b/crates/core/src/ctap2/tests.rs
+index 34e59b6..9f4bd3d 100644
+--- a/crates/core/src/ctap2/tests.rs
++++ b/crates/core/src/ctap2/tests.rs
+@@ -16,7 +16,7 @@ use crate::tpm_iface::{CredBlobs, CredProtect, ResidentEntry, RpIdHash, TpmError
+ 
+ /// In-memory backend. Credential IDs are `uid ‖ rpIdHash ‖ counter ‖ hmac flag` and open
+ /// only for that pair; hmac-secret is SHA-256(private ‖ salt).
+-#[derive(Debug, Default)]
++#[derive(Clone, Debug, Default)]
+ struct MockTpm {
+     created: u32,
+     signed: Vec<(Uid, GateKind, [u8; 32])>,
+@@ -675,9 +675,10 @@ fn errors_and_outcomes() {
+ }
+ 
+ #[test]
+-fn exclude_list_is_honoured() {
++fn exclude_list_is_honoured_after_user_verification() {
+     let mut a = auth();
+     let id = register(&mut a, vec![]);
++    assert_eq!(a.tpm_mut().created, 1);
+     let step = prep(
+         &mut a,
+         ALICE,
+@@ -686,10 +687,18 @@ fn exclude_list_is_honoured() {
+             mc_params(vec![(int(5), Value::Array(vec![descriptor(&id)]))]),
+         ),
+     );
++    // CTAP 2.1 requires a gesture before revealing that a credential exists, so the
++    // exclusion check must not short-circuit the prompt.
++    let pending = need_uv(step);
+     assert_eq!(
+-        touch(&mut a, ALICE, step),
++        a.complete(
++            pending,
++            UvOutcome::Matched(UvEvidence::from_fprintd_match(ALICE.0)),
++            1_000,
++        ),
+         vec![status::CREDENTIAL_EXCLUDED]
+     );
++    assert_eq!(a.tpm_mut().created, 1, "no credential was created");
+ }
+ 
+ // ---------------------------------------------------------------- clientPIN
+@@ -1264,10 +1273,16 @@ fn discoverable_credentials_multiple_accounts_and_next_assertion() {
+     let resp = body(&touch(&mut a, ALICE, step));
+     assert_eq!(get(&resp, 5), Some(&Value::Uint(2)), "numberOfCredentials");
+     assert!(get_text(get(&resp, 4).unwrap(), "id").is_some());
+-    let mut all = vec![get_text(get(&resp, 1).unwrap(), "id").unwrap().clone()];
++    // Most recent first: the second credential (same `created` second or newer).
++    assert_eq!(
++        get_text(get(&resp, 1).unwrap(), "id"),
++        Some(&Value::Bytes(second.clone()))
++    );
+     let next = body(&done(prep(&mut a, ALICE, &[cmd::GET_NEXT_ASSERTION])));
+-    all.push(get_text(get(&next, 1).unwrap(), "id").unwrap().clone());
+-    assert!(all.contains(&Value::Bytes(first)) && all.contains(&Value::Bytes(second)));
++    assert_eq!(
++        get_text(get(&next, 1).unwrap(), "id"),
++        Some(&Value::Bytes(first.clone()))
++    );
+     assert_eq!(
+         done(prep(&mut a, ALICE, &[cmd::GET_NEXT_ASSERTION])),
+         vec![status::NOT_ALLOWED],
+@@ -1297,6 +1312,175 @@ fn same_user_and_rp_replaces_the_discoverable_credential() {
+     assert_eq!(entries[0].credential_id, second);
+ }
+ 
++fn rk_option() -> (Value, Value) {
++    (int(7), Value::Map(vec![(text("rk"), Value::Bool(true))]))
++}
++
++fn full_resident_store() -> Vec<ResidentEntry> {
++    (0..64u8)
++        .map(|i| ResidentEntry {
++            rp_id: format!("rp{i}.example"),
++            rp_name: String::new(),
++            user_id: vec![i],
++            user_name: String::new(),
++            user_display_name: String::new(),
++            credential_id: vec![i; 41],
++            created: u64::from(i),
++        })
++        .collect()
++}
++
++/// WebAuthn `residentKey: "required"` reaches CTAP as `rk: true`;
++/// `requireResidentKey` is mapped by the client, so `rk` is the only wire selector.
++#[test]
++fn resident_key_required_stores_metadata_and_empty_allow_list_is_discoverable() {
++    let mut a = auth();
++    let id = register(&mut a, vec![rk_option()]);
++    let entries = &a.tpm_mut().resident[&ALICE.0];
++    assert_eq!(entries.len(), 1);
++    assert_eq!(entries[0].rp_id, RP);
++    assert_eq!(entries[0].rp_name, "Example");
++    assert_eq!(entries[0].user_id, vec![7; 16]);
++    assert_eq!(entries[0].user_name, "alice");
++    assert_eq!(entries[0].user_display_name, "Alice");
++    assert_eq!(entries[0].credential_id, id);
++
++    // WebAuthn L3 §5.1.3: an empty allowCredentials list means "discoverable".
++    let step = prep(
++        &mut a,
++        ALICE,
++        &req(cmd::GET_ASSERTION, ga_params(Some(Vec::new()), Vec::new())),
++    );
++    let resp = body(&touch(&mut a, ALICE, step));
++    assert_eq!(
++        get_text(get(&resp, 1).unwrap(), "id"),
++        Some(&Value::Bytes(id))
++    );
++    let user = get(&resp, 4).expect("discoverable user");
++    assert_eq!(
++        get_text(user, "id"),
++        Some(&Value::Bytes(vec![7; 16])),
++        "user.id"
++    );
++    assert_eq!(
++        get_text(user, "name").and_then(Value::as_text),
++        Some("alice")
++    );
++    assert_eq!(
++        get_text(user, "displayName").and_then(Value::as_text),
++        Some("Alice")
++    );
++}
++
++#[test]
++fn non_resident_credentials_are_not_discoverable() {
++    for rk in [None, Some(false)] {
++        let mut a = auth();
++        let mut extra = Vec::new();
++        if let Some(value) = rk {
++            extra.push((int(7), Value::Map(vec![(text("rk"), Value::Bool(value))])));
++        }
++        let id = register(&mut a, extra);
++        assert!(
++            a.tpm_mut().resident.get(&ALICE.0).is_none_or(Vec::is_empty),
++            "rk={rk:?} must not store resident metadata"
++        );
++
++        let step = prep(
++            &mut a,
++            ALICE,
++            &req(cmd::GET_ASSERTION, ga_params(Some(Vec::new()), Vec::new())),
++        );
++        assert_eq!(
++            touch(&mut a, ALICE, step),
++            vec![status::NO_CREDENTIALS],
++            "empty allowList cannot find a non-discoverable credential"
++        );
++
++        let step = prep(
++            &mut a,
++            ALICE,
++            &req(
++                cmd::GET_ASSERTION,
++                ga_params(Some(vec![descriptor(&id)]), Vec::new()),
++            ),
++        );
++        let resp = body(&touch(&mut a, ALICE, step));
++        assert_eq!(
++            get_text(get(&resp, 1).unwrap(), "id"),
++            Some(&Value::Bytes(id)),
++            "an explicit allowList still works"
++        );
++    }
++}
++
++#[test]
++fn resident_store_full_is_reported_without_creating_a_credential() {
++    let mut a = auth();
++    a.tpm_mut().resident.insert(ALICE.0, full_resident_store());
++    let step = prep(
++        &mut a,
++        ALICE,
++        &req(cmd::MAKE_CREDENTIAL, mc_params(vec![rk_option()])),
++    );
++    let pending = need_uv(step);
++    assert_eq!(
++        a.complete(
++            pending,
++            UvOutcome::Matched(UvEvidence::from_fprintd_match(ALICE.0)),
++            1_000,
++        ),
++        vec![status::KEY_STORE_FULL]
++    );
++    assert_eq!(a.tpm_mut().created, 0, "full store creates nothing");
++    assert_eq!(a.tpm_mut().resident[&ALICE.0].len(), 64);
++}
++
++#[test]
++fn resident_store_full_still_replaces_the_same_rp_and_user() {
++    let mut a = auth();
++    let mut entries = full_resident_store();
++    entries[0] = ResidentEntry {
++        rp_id: RP.to_owned(),
++        rp_name: "Example".to_owned(),
++        user_id: vec![7; 16],
++        user_name: "alice".to_owned(),
++        user_display_name: "Alice".to_owned(),
++        credential_id: vec![0xee; 41],
++        created: 1,
++    };
++    a.tpm_mut().resident.insert(ALICE.0, entries);
++    let second = register(&mut a, vec![rk_option()]);
++    let entries = &a.tpm_mut().resident[&ALICE.0];
++    assert_eq!(entries.len(), 64, "replacement does not grow the store");
++    assert_eq!(entries[0].credential_id, second);
++    assert_eq!(entries[0].user_id, vec![7; 16]);
++}
++
++/// A service restart drops the broker's in-memory `UserState` but not the TPM-backed
++/// discoverable store; a fresh authenticator over the same backend must still find it.
++#[test]
++fn resident_metadata_survives_a_new_authenticator_instance() {
++    let mut a = auth();
++    let id = register(&mut a, vec![rk_option()]);
++    let tpm = a.tpm_mut().clone();
++    let mut restarted = Authenticator::new(tpm);
++    let step = prep(
++        &mut restarted,
++        ALICE,
++        &req(cmd::GET_ASSERTION, ga_params(Some(Vec::new()), Vec::new())),
++    );
++    let resp = body(&touch(&mut restarted, ALICE, step));
++    assert_eq!(
++        get_text(get(&resp, 1).unwrap(), "id"),
++        Some(&Value::Bytes(id))
++    );
++    assert_eq!(
++        get_text(get(&resp, 4).unwrap(), "name").and_then(Value::as_text),
++        Some("alice")
++    );
++}
++
+ /// The applied `credProtect` level from a makeCredential response, or `None` when the
+ /// authenticator emitted no extension output. Assumes the mock's fixed public key.
+ fn cred_protect_echo(resp: &Value) -> Option<u64> {

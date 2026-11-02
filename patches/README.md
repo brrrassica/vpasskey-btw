@@ -9,10 +9,10 @@ upstream pin from [`versions.env`](../versions.env):
    clean working tree. The files here, not that local commit, are the source of truth.
 
 The pin (`v0.1.0-brrr1`) already contains patches 0001–0003, so `install.sh`
-checks a per-patch marker and skips only the patches already in the tree. Patch
-0004 is newer than the pin and is applied on top of it. The series remains the
-reference for older pristine pins, and the pin itself still keeps its SHA
-integrity check. When you add a patch, add its marker check to the
+checks a per-patch marker and skips only the patches already in the tree. Patches
+0004 and 0005 are newer than the pin and are applied on top of it. The series
+remains the reference for older pristine pins, and the pin itself still keeps
+its SHA integrity check. When you add a patch, add its marker check to the
 `patch_marker` function in [`install.sh`](../install.sh:189) and list it here.
 
 ## Current series
@@ -66,6 +66,21 @@ integrity check. When you add a patch, add its marker check to the
    presence-only signature, no silent assertion).
  - Marker: `enforceCredentialProtectionPolicy` in
    `crates/core/src/ctap2/make_credential.rs`.
+- `0005-0.2.0-resident-key-coverage.patch`
+ - M3.4: an empty `allowList` is treated as "no restriction", so a
+   `getAssertion` with `allowCredentials: []` can use a discoverable credential
+   instead of returning `CTAP2_ERR_NO_CREDENTIALS` (WebAuthn L3 §5.1.3).
+ - M3.4: `rk: true` stores the full resident metadata and is discoverable;
+   `rk: false` and an absent `rk` create non-discoverable credentials.
+   `requireResidentKey` is WebAuthn-side and reaches CTAP only as `rk`.
+ - M3.4: tests pin most-recent-first ordering across `getNextAssertion`, the
+   `CTAP2_ERR_CREDENTIAL_EXCLUDED` result after a UV gesture (not before it),
+   and `CTAP2_ERR_KEY_STORE_FULL` at 64 new resident credentials without
+   creating one. Replacing the same `(rp_id, user_id)` still works when full.
+ - M3.4: a fresh `Authenticator` over the same backend (a broker restart) still
+   finds and returns the resident user metadata.
+ - Marker: the empty-`allowList` comment in
+   `crates/core/src/ctap2/get_assertion.rs`.
 
 ## Refreshing a patch
 

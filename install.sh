@@ -207,6 +207,10 @@ patch_marker() {
 			grep -q 'enforceCredentialProtectionPolicy' \
 				"$SRC/crates/core/src/ctap2/make_credential.rs"
 			;;
+		0005-*)
+			grep -q 'empty allowList means' \
+				"$SRC/crates/core/src/ctap2/get_assertion.rs"
+			;;
 		*)
 			return 1
 			;;

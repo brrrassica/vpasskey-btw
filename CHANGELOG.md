@@ -55,8 +55,8 @@ items.
 - Local fixes are carried as a tracked patch series in `patches/`. The fork
   release `v0.1.0-brrr1` already contains patches 0001–0003, so `install.sh`
   checks a marker per patch and skips only those already in the tree. An older
-  pristine pin still gets the whole series, and a patch newer than the pin
-  (currently 0004) is applied on top.
+  pristine pin still gets the whole series, and the patches newer than the pin
+  (currently 0004 and 0005) are applied on top.
 - The installer installs each staged file with explicit `root:root` ownership
   and modes instead of copying a staging tree, which previously could stamp the
   invoking user's ownership onto shared system directories.
@@ -69,6 +69,10 @@ items.
 ### Fixed
 
 - A single `verify-no-match` no longer ends a WebAuthn request immediately.
+- An empty `allowCredentials` list is treated as "no restriction", so a
+ discoverable assertion can complete instead of returning
+ `CTAP2_ERR_NO_CREDENTIALS`. Resident-key metadata, multi-credential ordering,
+ exclusion, and the 64-credential limit are now covered by regression tests.
 - A 30 s verification deadline no longer cuts off a browser or user that needs
   more time.
 - The installer no longer skips a stale `passkey-tpm/` checkout, so a fresh
