@@ -1,0 +1,478 @@
+diff --git a/crates/agent/src/main.rs b/crates/agent/src/main.rs
+index 93c41ba..74db093 100644
+--- a/crates/agent/src/main.rs
++++ b/crates/agent/src/main.rs
+@@ -7,7 +7,9 @@
+ //! For users without an enrolled fingerprint the broker asks this agent to confirm presence
+ //! (`PresenceRequested`, AD-022); the agent shows an Allow/Deny notification and answers
+ //! with `ConfirmPresence` on the same connection that made the `Ctap` call.
+-#![allow(clippy::print_stderr)]
++#![allow(clippy::print_stderr, clippy::print_stdout)]
++
++mod prompt;
+ 
+ use std::process::ExitCode;
+ use std::sync::mpsc as std_mpsc;
+@@ -26,8 +28,21 @@ use zbus::{Connection, MatchRule, MessageStream};
+ const BUS_NAME: &str = "io.github.dangerousplay.PasskeyTpm1";
+ const OBJECT_PATH: &str = "/io/github/dangerousplay/PasskeyTpm1";
+ const TICK: Duration = Duration::from_millis(100);
+-/// Generous bound on a broker call: the broker's fingerprint timeout is 30 s.
+-const BROKER_TIMEOUT: Duration = Duration::from_secs(45);
++/// Default broker fingerprint window; the broker accepts the same
++/// `PASSKEY_UV_TIMEOUT_SECS` override.
++const DEFAULT_UV_TIMEOUT_SECS: u64 = 60;
++/// Extra time on top of the broker's window so the broker reports the real
++/// timeout/blocked status instead of the agent racing it.
++const BROKER_HEADROOM_SECS: u64 = 15;
++
++fn broker_timeout() -> Duration {
++    let uv = std::env::var("PASSKEY_UV_TIMEOUT_SECS")
++        .ok()
++        .and_then(|v| v.parse::<u64>().ok())
++        .filter(|s| *s > 0)
++        .unwrap_or(DEFAULT_UV_TIMEOUT_SECS);
++    Duration::from_secs(uv.saturating_add(BROKER_HEADROOM_SECS))
++}
+ const STATUS_OTHER: u8 = 0x7F;
+ /// Re-check of the seat state in case a logind signal was missed.
+ const SEAT_POLL: Duration = Duration::from_secs(2);
+@@ -267,12 +282,33 @@ fn open_device(
+     Ok(writer)
+ }
+ 
++/// Asks for a fingerprint through the selected backend. Native/polkit are not built yet, so
++/// they fall back to the notification rather than leaving the user without a prompt.
++fn prompt_user(backend: prompt::Backend, rp: String, notes: &std_mpsc::Sender<Note>) {
++    match backend {
++        prompt::Backend::Terminal => {
++            eprintln!("Touch the fingerprint reader to continue with {rp}");
++        }
++        prompt::Backend::Notification => {
++            let _ = notes.send(Note::Fingerprint(rp));
++        }
++        prompt::Backend::Native | prompt::Backend::Polkit => {
++            eprintln!(
++                "{} prompt backend is not built yet; using a notification",
++                backend.as_str()
++            );
++            let _ = notes.send(Note::Fingerprint(rp));
++        }
++    }
++}
++
+ fn apply(
+     effects: Vec<Effect>,
+     writer: Option<&UhidWriter>,
+     bus: &Connection,
+     tx: &mpsc::UnboundedSender<Input>,
+     notes: &std_mpsc::Sender<Note>,
++    backend: prompt::Backend,
+ ) {
+     for effect in effects {
+         match effect {
+@@ -290,7 +326,7 @@ fn apply(
+                 let tx = tx.clone();
+                 tokio::spawn(async move {
+                     let response =
+-                        match tokio::time::timeout(BROKER_TIMEOUT, ctap(&bus, request)).await {
++                        match tokio::time::timeout(broker_timeout(), ctap(&bus, request)).await {
+                             Ok(Ok(r)) => r,
+                             Ok(Err(e)) => {
+                                 eprintln!("broker call failed: {e}");
+@@ -309,15 +345,34 @@ fn apply(
+                     }
+                 });
+             }
+-            Effect::Prompt(rp) => {
+-                let _ = notes.send(Note::Fingerprint(rp));
+-            }
++            Effect::Prompt(rp) => prompt_user(backend, rp, notes),
+         }
+     }
+ }
+ 
++fn probe_prompt() -> ExitCode {
++    let detection = prompt::Detection::detect();
++    let backend = prompt::select(
++        std::env::var("PASSKEY_PROMPT").ok().as_deref(),
++        &detection,
++        detection.graphical(),
++    );
++    println!("{}", prompt::report(&detection, backend));
++    ExitCode::SUCCESS
++}
++
+ #[tokio::main]
+ async fn main() -> ExitCode {
++    if std::env::args().nth(1).as_deref() == Some("--probe-prompt") {
++        return probe_prompt();
++    }
++    let detection = prompt::Detection::detect();
++    let backend = prompt::select(
++        std::env::var("PASSKEY_PROMPT").ok().as_deref(),
++        &detection,
++        detection.graphical(),
++    );
++    eprintln!("{}", prompt::report(&detection, backend));
+     let bus = match Connection::system().await {
+         Ok(b) => b,
+         Err(e) => {
+@@ -352,9 +407,9 @@ async fn main() -> ExitCode {
+         let link = if present { writer.as_ref() } else { None };
+         tokio::select! {
+             input = rx.recv() => match input {
+-                Some(Input::Output(data)) if present => apply(hid.on_output(&data, now_ms()), link, &bus, &tx, &notes),
++                Some(Input::Output(data)) if present => apply(hid.on_output(&data, now_ms()), link, &bus, &tx, &notes, backend),
+                 Some(Input::Output(_)) => {}
+-                Some(Input::Reply(id, response)) => apply(hid.on_broker_reply(id, &response), link, &bus, &tx, &notes),
++                Some(Input::Reply(id, response)) => apply(hid.on_broker_reply(id, &response), link, &bus, &tx, &notes, backend),
+                 Some(Input::Seat(true)) if !present => {
+                     let result = match &writer {
+                         Some(w) => w.recreate(&params),
+@@ -372,7 +427,7 @@ async fn main() -> ExitCode {
+                     }
+                 }
+                 Some(Input::Seat(false)) if present => {
+-                    apply(hid.reset(), None, &bus, &tx, &notes);
++                    apply(hid.reset(), None, &bus, &tx, &notes, backend);
+                     present = false;
+                     if let Some(Err(e)) = writer.as_ref().map(UhidWriter::remove_device) {
+                         // Can't guarantee the device is gone: stop, which closes the handle.
+@@ -384,7 +439,7 @@ async fn main() -> ExitCode {
+                 Some(Input::Seat(_)) => {}
+                 Some(Input::DeviceGone) | None => return ExitCode::FAILURE,
+             },
+-            _ = tick.tick() => apply(hid.on_tick(now_ms()), link, &bus, &tx, &notes),
++            _ = tick.tick() => apply(hid.on_tick(now_ms()), link, &bus, &tx, &notes, backend),
+             _ = tokio::signal::ctrl_c() => return ExitCode::SUCCESS,
+         }
+     }
+diff --git a/crates/agent/src/prompt.rs b/crates/agent/src/prompt.rs
+new file mode 100644
+index 0000000..46690a3
+--- /dev/null
++++ b/crates/agent/src/prompt.rs
+@@ -0,0 +1,222 @@
++//! Prompt backend selection and Omarchy detection (0.2.0 M4.1/M4.2).
++//!
++//! The full-screen layer-shell overlay (M4.3) is not part of this foundation, but the
++//! selection logic is: [`Detection`] inspects the session, [`select`] honours
++//! `PASSKEY_PROMPT=auto|native|polkit|notification|terminal`, and the agent uses the result
++//! to decide how to ask for a fingerprint. Detection is advisory: an unavailable native
++//! backend must fall through to a notification, never fail the passkey operation.
++
++use std::path::{Path, PathBuf};
++
++/// How the agent asks the user for a fingerprint.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Backend {
++    /// Full-screen Wayland layer-shell overlay (M4.3; not built yet).
++    Native,
++    /// polkit/desktop authentication dialog.
++    Polkit,
++    /// notify-rust toast (the current top-right notification).
++    Notification,
++    /// stderr prompt for TTY/SSH sessions.
++    Terminal,
++}
++
++impl Backend {
++    #[must_use]
++    pub fn as_str(self) -> &'static str {
++        match self {
++            Self::Native => "native",
++            Self::Polkit => "polkit",
++            Self::Notification => "notification",
++            Self::Terminal => "terminal",
++        }
++    }
++}
++
++/// Session facts collected once at agent start.
++#[derive(Debug, Default, Clone, PartialEq, Eq)]
++pub struct Detection {
++    /// `omarchy` is on `PATH`.
++    pub omarchy_command: bool,
++    /// `OMARCHY_PATH` is set.
++    pub omarchy_path: bool,
++    /// `$HOME/.local/share/omarchy` exists.
++    pub omarchy_data_dir: bool,
++    /// `/etc/omarchy-release` exists.
++    pub omarchy_release: bool,
++    /// `XDG_CURRENT_DESKTOP` mentions Hyprland.
++    pub hyprland_desktop: bool,
++    /// The session is Wayland (`XDG_SESSION_TYPE` or `WAYLAND_DISPLAY`).
++    pub wayland_session: bool,
++    /// `hyprctl` is on `PATH`.
++    pub hyprctl: bool,
++}
++
++fn is_executable(path: &Path) -> bool {
++    use std::os::unix::fs::PermissionsExt;
++    std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
++}
++
++fn command_in_path(name: &str) -> bool {
++    std::env::var_os("PATH").is_some_and(|paths| {
++        std::env::split_paths(&paths).any(|dir| {
++            let candidate = dir.join(name);
++            candidate.is_file() && is_executable(&candidate)
++        })
++    })
++}
++
++fn non_empty_env(name: &str) -> bool {
++    std::env::var_os(name).is_some_and(|v| !v.is_empty())
++}
++
++impl Detection {
++    #[must_use]
++    pub fn detect() -> Self {
++        let wayland_by_type =
++            std::env::var("XDG_SESSION_TYPE").is_ok_and(|v| v.eq_ignore_ascii_case("wayland"));
++        Self {
++            omarchy_command: command_in_path("omarchy"),
++            omarchy_path: non_empty_env("OMARCHY_PATH"),
++            omarchy_data_dir: std::env::var_os("HOME")
++                .is_some_and(|home| PathBuf::from(home).join(".local/share/omarchy").is_dir()),
++            omarchy_release: Path::new("/etc/omarchy-release").is_file(),
++            hyprland_desktop: std::env::var("XDG_CURRENT_DESKTOP")
++                .is_ok_and(|v| v.to_lowercase().contains("hyprland")),
++            wayland_session: wayland_by_type || non_empty_env("WAYLAND_DISPLAY"),
++            hyprctl: command_in_path("hyprctl"),
++        }
++    }
++
++    /// Any positive Omarchy signal is enough; the individual facts are kept for diagnostics.
++    #[must_use]
++    pub fn is_omarchy(&self) -> bool {
++        self.omarchy_command || self.omarchy_path || self.omarchy_data_dir || self.omarchy_release
++    }
++
++    /// Whether a graphical session exists at all (for choosing notification vs terminal).
++    #[must_use]
++    pub fn graphical(&self) -> bool {
++        self.wayland_session || non_empty_env("DISPLAY")
++    }
++
++    /// The native overlay needs Omarchy/Hyprland on Wayland. `hyprctl` is reported but not
++    /// required: it is useful evidence, not a hard gate.
++    #[must_use]
++    pub fn can_use_native(&self) -> bool {
++        (self.is_omarchy() || self.hyprland_desktop) && self.wayland_session
++    }
++
++    fn summary(&self) -> String {
++        let yes = |v: bool| if v { "yes" } else { "no" };
++        format!(
++            "omarchy: cmd={} path={} data={} release={}; hyprland={} wayland={} hyprctl={}",
++            yes(self.omarchy_command),
++            yes(self.omarchy_path),
++            yes(self.omarchy_data_dir),
++            yes(self.omarchy_release),
++            yes(self.hyprland_desktop),
++            yes(self.wayland_session),
++            yes(self.hyprctl),
++        )
++    }
++}
++
++fn automatic_backend(detection: &Detection, graphical: bool) -> Backend {
++    if detection.can_use_native() {
++        Backend::Native
++    } else if graphical {
++        Backend::Notification
++    } else {
++        Backend::Terminal
++    }
++}
++
++/// Resolves `PASSKEY_PROMPT` against the detected session.
++///
++/// An explicitly requested `native` backend that the session cannot support falls back the
++/// same way `auto` would, so a stale environment variable cannot break passkey operations.
++#[must_use]
++pub fn select(requested: Option<&str>, detection: &Detection, graphical: bool) -> Backend {
++    match requested.unwrap_or("auto").to_ascii_lowercase().as_str() {
++        "native" if detection.can_use_native() => Backend::Native,
++        "polkit" => Backend::Polkit,
++        "notification" => Backend::Notification,
++        "terminal" => Backend::Terminal,
++        _ => automatic_backend(detection, graphical),
++    }
++}
++
++/// Human-readable report for `passkey-tpm-agent --probe-prompt` and `verify.sh --prompt`.
++#[must_use]
++pub fn report(detection: &Detection, backend: Backend) -> String {
++    let note = match backend {
++        Backend::Native | Backend::Polkit => {
++            "\nnote: this backend is not built yet; the agent falls back to a notification"
++        }
++        Backend::Notification | Backend::Terminal => "",
++    };
++    format!(
++        "prompt backend: {}\ndetection: {}\ngraphical session: {}{note}",
++        backend.as_str(),
++        detection.summary(),
++        if detection.graphical() { "yes" } else { "no" }
++    )
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{select, Backend, Detection};
++
++    fn detection(omarchy: bool, hyprland: bool, wayland: bool) -> Detection {
++        Detection {
++            omarchy_command: omarchy,
++            hyprland_desktop: hyprland,
++            wayland_session: wayland,
++            ..Detection::default()
++        }
++    }
++
++    #[test]
++    fn auto_prefers_native_on_omarchy_wayland() {
++        let d = detection(true, true, true);
++        assert_eq!(select(None, &d, true), Backend::Native);
++    }
++
++    #[test]
++    fn auto_uses_notification_on_other_graphical_sessions() {
++        let d = detection(false, false, true);
++        assert_eq!(select(Some("auto"), &d, true), Backend::Notification);
++    }
++
++    #[test]
++    fn auto_uses_terminal_without_a_graphical_session() {
++        let d = detection(false, false, false);
++        assert_eq!(select(Some("auto"), &d, false), Backend::Terminal);
++    }
++
++    #[test]
++    fn explicit_native_falls_back_when_unsupported() {
++        let d = detection(false, false, false);
++        assert_eq!(select(Some("native"), &d, true), Backend::Notification);
++        assert_eq!(select(Some("native"), &d, false), Backend::Terminal);
++    }
++
++    #[test]
++    fn explicit_backends_are_honoured() {
++        let d = detection(true, true, true);
++        assert_eq!(select(Some("polkit"), &d, true), Backend::Polkit);
++        assert_eq!(
++            select(Some("notification"), &d, true),
++            Backend::Notification
++        );
++        assert_eq!(select(Some("terminal"), &d, true), Backend::Terminal);
++        assert_eq!(select(Some("native"), &d, true), Backend::Native);
++    }
++
++    #[test]
++    fn hyprland_session_counts_as_native_capable() {
++        let d = detection(false, true, true);
++        assert_eq!(select(None, &d, true), Backend::Native);
++    }
++}
+diff --git a/crates/uvd/src/lib.rs b/crates/uvd/src/lib.rs
+index 3a1f308..ba0c28f 100644
+--- a/crates/uvd/src/lib.rs
++++ b/crates/uvd/src/lib.rs
+@@ -38,6 +38,14 @@ const STATUS_INVALID_LENGTH: u8 = 0x03;
+ const STATUS_OTHER: u8 = 0x7F;
+ /// CTAP2_ERR_OPERATION_DENIED: the caller isn't the user at the seat.
+ const STATUS_OPERATION_DENIED: u8 = 0x27;
++/// Fingerprint scans allowed for one WebAuthn request before reporting a mismatch.
++///
++/// A single `verify-no-match` used to end the request, which forced the browser to start a
++/// whole new WebAuthn operation after one badly placed finger. Retrying here keeps the same
++/// request (and browser deadline) alive.
++const MAX_UV_ATTEMPTS: u32 = 3;
++/// Pause between retryable mismatches so the reader can settle and the user can reposition.
++const UV_RETRY_DELAY: Duration = Duration::from_millis(500);
+ 
+ enum Job {
+     Prepare {
+@@ -243,6 +251,36 @@ impl Broker {
+         }
+     }
+ 
++    /// Runs up to [`MAX_UV_ATTEMPTS`] fingerprint scans within `verify_timeout`.
++    ///
++    /// Only a mismatch is retried: cancellation, timeout, reader errors and a match return
++    /// immediately. Cancellation also wins during the pause between attempts.
++    async fn verify_with_retries(&self, username: &str, cancel: &CancellationToken) -> UvResult {
++        let deadline = tokio::time::Instant::now() + self.verify_timeout;
++        for attempt in 1..=MAX_UV_ATTEMPTS {
++            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
++            if remaining.is_zero() {
++                return UvResult::TimedOut;
++            }
++            let result = fprintd::verify(&self.fprintd, username, remaining, cancel.clone()).await;
++            if result != UvResult::NoMatch || attempt == MAX_UV_ATTEMPTS {
++                return result;
++            }
++            #[allow(clippy::print_stderr)]
++            {
++                eprintln!("fingerprint mismatch; retrying ({attempt}/{MAX_UV_ATTEMPTS})");
++            }
++            let pause =
++                UV_RETRY_DELAY.min(deadline.saturating_duration_since(tokio::time::Instant::now()));
++            tokio::select! {
++                biased;
++                () = cancel.cancelled() => return UvResult::Cancelled,
++                () = tokio::time::sleep(pause) => {}
++            }
++        }
++        UvResult::NoMatch
++    }
++
+     /// Serves one request. `cancel` is registered before any await (HARD-12), so a Cancel
+     /// that arrives while the session, fprintd or the TPM is still being asked is not lost.
+     async fn run(
+@@ -302,8 +340,7 @@ impl Broker {
+             _ if cancel.is_cancelled() => UvOutcome::Cancelled,
+             None => UvOutcome::Unavailable,
+             Some(name) => {
+-                let result =
+-                    fprintd::verify(&self.fprintd, &name, self.verify_timeout, cancel).await;
++                let result = self.verify_with_retries(&name, &cancel).await;
+                 match result {
+                     // The only place evidence is created: a real fprintd match for this uid.
+                     UvResult::Match => UvOutcome::Matched(UvEvidence::from_fprintd_match(uid)),
+diff --git a/crates/uvd/src/main.rs b/crates/uvd/src/main.rs
+index 84d09d1..5579bfc 100644
+--- a/crates/uvd/src/main.rs
++++ b/crates/uvd/src/main.rs
+@@ -11,7 +11,19 @@ use passkey_tpm_uvd::{serve, Broker, Logind, NssUsers, TpmWorker};
+ use tss_esapi::tcti_ldr::TctiNameConf;
+ use tss_esapi::Context;
+ 
+-const VERIFY_TIMEOUT: Duration = Duration::from_secs(30);
++/// Default fingerprint window. A WebAuthn operation may legitimately take longer than the
++/// old 30 s while the user finds the reader or retries a scan, and a browser that gives up
++/// first produces a confusing failure. Override with `PASSKEY_UV_TIMEOUT_SECS`.
++const DEFAULT_VERIFY_TIMEOUT_SECS: u64 = 60;
++
++fn verify_timeout() -> Duration {
++    let secs = std::env::var("PASSKEY_UV_TIMEOUT_SECS")
++        .ok()
++        .and_then(|v| v.parse::<u64>().ok())
++        .filter(|s| *s > 0)
++        .unwrap_or(DEFAULT_VERIFY_TIMEOUT_SECS);
++    Duration::from_secs(secs)
++}
+ 
+ #[tokio::main]
+ async fn main() -> ExitCode {
+@@ -60,7 +72,7 @@ async fn main() -> ExitCode {
+         conn.clone(),
+         Box::new(NssUsers),
+         Box::new(Logind::new(conn.clone())),
+-        VERIFY_TIMEOUT,
++        verify_timeout(),
+     );
+     if let Err(e) = serve(&conn, broker).await {
+         eprintln!("cannot export the broker: {e}");

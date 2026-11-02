@@ -2,16 +2,91 @@
 # Remove passkey-tpm. Credentials in /var/lib/passkey-tpm are kept unless --purge.
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSIONS_FILE="$ROOT/versions.env"
+
+DRY_RUN=0
+FORCE=0
 PURGE=0
-[[ "${1:-}" == "--purge" ]] && PURGE=1
+SHOW_VERSION=0
+
+usage() {
+	cat <<'EOF'
+usage: uninstall.sh [--purge] [--dry-run] [--force] [--version] [--help]
+
+  --purge     Also remove /var/lib/passkey-tpm and the passkey-tpm user/group.
+  --dry-run   Print what would be removed; touch nothing and run no sudo.
+  --force     Best effort: ignore stop/removal errors and skip daemon reloads.
+  --version   Print the wrapper version, then exit.
+  --help      Show this help.
+EOF
+}
 
 log() { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
 
+while (( $# > 0 )); do
+	case "$1" in
+		--purge) PURGE=1 ;;
+		--dry-run) DRY_RUN=1 ;;
+		--force) FORCE=1 ;;
+		--version|-V) SHOW_VERSION=1 ;;
+		--help|-h) usage; exit 0 ;;
+		*) printf 'error: unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
+	esac
+	shift
+done
+
+WRAPPER_VERSION="unknown"
+if [[ -f "$VERSIONS_FILE" ]]; then
+	# shellcheck source=versions.env disable=SC1091
+	source "$VERSIONS_FILE"
+	WRAPPER_VERSION="${VPASSKEY_VERSION:-unknown}"
+fi
+
+if (( SHOW_VERSION )); then
+	printf 'vpasskey-btw %s\n' "$WRAPPER_VERSION"
+	exit 0
+fi
+
+# In dry-run mode, print each privileged command instead of running it.
+run() {
+	if (( DRY_RUN )); then
+		printf '  [dry-run] %s\n' "$*"
+	else
+		"$@"
+	fi
+}
+
+if (( DRY_RUN )); then
+	cat <<EOF
+
+==> Dry run: no changes will be made
+
+wrapper: vpasskey-btw $WRAPPER_VERSION
+purge:   $([[ "$PURGE" == "1" ]] && echo yes || echo no)
+
+Would stop and disable passkey-tpm-agent and passkey-tpm-uvd.
+Would remove /usr/lib/passkey-tpm, /usr/bin/passkey-tpm, and the installed
+systemd, D-Bus, polkit, udev, sysusers, and modules-load files.
+EOF
+	if (( PURGE )); then
+		echo "Would purge /var/lib/passkey-tpm and the passkey-tpm user/group."
+	fi
+	echo "Would reload systemd, udev, and D-Bus."
+	exit 0
+fi
+
+# A missing service is not an error: run on a partial install must still clean
+# up. --force additionally tolerates a broken/hung manager.
+ignore_missing() {
+	"$@" 2>/dev/null || true
+}
+
 log "Stopping session agent"
-systemctl --user disable --now passkey-tpm-agent 2>/dev/null || true
+ignore_missing systemctl --user disable --now passkey-tpm-agent
 
 log "Stopping broker"
-sudo systemctl stop passkey-tpm-uvd 2>/dev/null || true
+ignore_missing sudo systemctl stop passkey-tpm-uvd
 
 log "Removing installed files"
 sudo rm -rf /usr/lib/passkey-tpm /usr/bin/passkey-tpm
@@ -33,9 +108,13 @@ if [[ "$PURGE" == "1" ]]; then
 	sudo groupdel passkey-tpm 2>/dev/null || true
 fi
 
-log "Reloading daemons"
-sudo systemctl daemon-reload
-sudo udevadm control --reload-rules
-sudo systemctl reload dbus.service 2>/dev/null || true
+if (( FORCE )); then
+	log "Skipping daemon reloads (--force)"
+else
+	log "Reloading daemons"
+	sudo systemctl daemon-reload
+	sudo udevadm control --reload-rules
+	sudo systemctl reload dbus.service 2>/dev/null || true
+fi
 
 log "Done. Reboot or log out/in to fully release the virtual HID device."
