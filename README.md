@@ -91,7 +91,7 @@ A step-by-step guide, including optional PIN setup and local testing, is in
 ## Status and compatibility
 
 `vpasskey-btw` 0.2.0 is a development release. It upgrades the pinned
-authenticator to `passkey-tpm v0.1.0-beta.2`, adds the polkit fingerprint
+authenticator to `passkey-tpm v0.1.0-brrr1`, adds the polkit fingerprint
 prompt, retries, a configurable verification timeout, and safer installers. See
 [CHANGELOG.md](CHANGELOG.md) for the full list.
 

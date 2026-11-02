@@ -47,12 +47,14 @@ items.
 
 ### Changed
 
-- The upstream pin is now `passkey-tpm v0.1.0-beta.2` (commit `1372cf4`), read
+- The upstream pin is now `passkey-tpm v0.1.0-brrr1` (commit `dc4fda7`) from
+  [`brrrassica/passkey-tpm`](https://github.com/brrrassica/passkey-tpm), read
   from `versions.env`. An existing `passkey-tpm/` checkout is fetched and
   detached to the pinned commit instead of being reused blindly, and the fetched
   ref must resolve to the pinned SHA unless a development ref is overridden.
-- Local fixes are carried as a tracked patch series in `patches/` and applied by
-  `install.sh` on top of the pristine pin.
+- Local fixes are carried as a tracked patch series in `patches/`. The fork
+  release `v0.1.0-brrr1` already contains the series, so `install.sh` detects it
+  and skips applying the patches; an older pristine pin still gets them.
 - The installer installs each staged file with explicit `root:root` ownership
   and modes instead of copying a staging tree, which previously could stamp the
   invoking user's ownership onto shared system directories.

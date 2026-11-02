@@ -12,17 +12,18 @@ Henrique ([@dangerousplay](https://github.com/dangerousplay))**.
 - License: MIT OR Apache-2.0
 - It implements the TPM-backed virtual security key, the broker/agent split, the
   CTAP2 logic, the fprintd user verification, and the packaging files.
-- This project pins it through `versions.env`, currently `v0.1.0-beta.2`
-  (commit `1372cf4`), builds it from source, and applies the local patches in
-  `patches/`.
+- This project pins it through `versions.env`, currently `v0.1.0-brrr1` from
+  the [`brrrassica` fork](https://github.com/brrrassica/passkey-tpm) (commit
+  `dc4fda7`), builds it from source, and keeps the local patches in `patches/`
+  for older pristine pins.
 
 If you find a bug in the passkey behaviour itself, it most likely belongs
 upstream.
 
 ## Local patches
 
-These changes are maintained here, on top of the pristine upstream pin, and are
-applied in order by `install.sh`:
+These changes were maintained here and are now included in the pinned fork
+release `v0.1.0-brrr1`; `install.sh` applies them only when the pin lacks them:
 
 | Patch | Purpose |
 |---|---|

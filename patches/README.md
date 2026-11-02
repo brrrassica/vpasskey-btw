@@ -8,8 +8,10 @@ upstream pin from [`versions.env`](../versions.env):
 3. Commit the result in the checkout so the next install's dirty-tree guard still sees a
    clean working tree. The files here, not that local commit, are the source of truth.
 
-The upstream pin stays at the pristine upstream commit (`v0.1.0-beta.2` @ `1372cf4`),
-so `versions.env` keeps its integrity check.
+The pin (`v0.1.0-brrr1`) already contains this series, so `install.sh` detects
+the applied marker files and skips the patches. They remain as the reference
+series for older pristine pins; the pin itself still keeps its SHA integrity
+check.
 
 ## Current series
 

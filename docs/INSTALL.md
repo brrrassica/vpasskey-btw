@@ -33,14 +33,17 @@ The installer will:
 
 1. Fetch the upstream authenticator (`passkey-tpm`) from `versions.env`, verify
    that the ref resolves to the pinned commit, and check out that exact commit.
-2. Apply the local patch series in `patches/` on top of the pristine pin.
+2. Ensure the local patch series in `patches/` is present (skipped when the
+   pinned ref already contains it, as `v0.1.0-brrr1` does).
 3. Build it with Cargo.
 4. Install its files into `/usr` with explicit `root:root` ownership and modes
    (you'll approve this with your password).
 5. Create the `passkey-tpm` service account and load the `uhid` kernel module.
 6. Start the per-user session service.
 
-The current pin is `passkey-tpm v0.1.0-beta.2` (commit `1372cf4`). Keep the
+The current pin is `passkey-tpm v0.1.0-brrr1` from
+[`brrrassica/passkey-tpm`](https://github.com/brrrassica/passkey-tpm) (commit
+`dc4fda7`). Keep the
 wrapper's `versions.env` as the source of truth rather than editing
 `install.sh`. For development, `PASSKEY_TPM_REPO`, `PASSKEY_TPM_REF`, and
 `PASSKEY_TPM_COMMIT` can override the pin; a custom ref without a matching

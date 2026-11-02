@@ -70,7 +70,7 @@ if (( SHOW_VERSION )); then
 	exit 0
 fi
 
-# REF is normally a tag like v0.1.0-beta.2; strip the leading v for comparing
+# REF is normally a tag like v0.1.0-brrr1; strip the leading v for comparing
 # with `passkey-tpm version`.
 TARGET_VERSION="${REF#v}"
 
@@ -132,7 +132,7 @@ libexecdir:       $LIBEXECDIR
 Would sync the source checkout (clone/fetch/checkout as needed).
 EOF
 	while IFS= read -r patch; do
-		[[ -n "$patch" ]] && printf 'Would apply patch: %s\n' "$patch"
+		[[ -n "$patch" ]] && printf 'Would ensure patch (skipped if already in the pin): %s\n' "$patch"
 	done < <(patch_files)
 	cat <<EOF
 Would build release binaries and stage a dist tree.
@@ -186,11 +186,23 @@ sync_source() {
 	fi
 }
 
-# Apply the tracked local patch series on top of the pristine upstream
+# The fork release v0.1.0-brrr1 already carries this series. A marker file
+# created by the last patch distinguishes that case, so an older pristine pin
+# still gets the patches while the pinned fork tag does not get them twice.
+patches_already_applied() {
+	[[ -e "$SRC/crates/uv/src/polkit.rs" ]]
+}
+
+# Apply the tracked local patch series on top of a pristine upstream
 # checkout, then commit it so the next run's dirty-checkout guard still sees a
 # clean tree. The files under patches/ remain the source of truth.
 apply_patches() {
 	local patch
+
+	if patches_already_applied; then
+		log "Patch series already present in ${COMMIT:-$REF}; nothing to apply"
+		return 0
+	fi
 	while IFS= read -r patch; do
 		[[ -n "$patch" ]] || continue
 		log "Applying $(basename "$patch")"
