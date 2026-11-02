@@ -66,8 +66,9 @@ wrapper: vpasskey-btw $WRAPPER_VERSION
 purge:   $([[ "$PURGE" == "1" ]] && echo yes || echo no)
 
 Would stop and disable passkey-tpm-agent and passkey-tpm-uvd.
-Would remove /usr/lib/passkey-tpm, /usr/bin/passkey-tpm, and the installed
-systemd, D-Bus, polkit, udev, sysusers, and modules-load files.
+Would remove /usr/lib/passkey-tpm, /usr/bin/passkey-tpm,
+/usr/bin/passkey-tpm-tray, and the installed systemd, D-Bus, polkit, udev,
+sysusers, and modules-load files.
 EOF
 	if (( PURGE )); then
 		echo "Would purge /var/lib/passkey-tpm and the passkey-tpm user/group."
@@ -89,7 +90,8 @@ log "Stopping broker"
 ignore_missing sudo systemctl stop passkey-tpm-uvd
 
 log "Removing installed files"
-sudo rm -rf /usr/lib/passkey-tpm /usr/bin/passkey-tpm
+sudo rm -rf /usr/lib/passkey-tpm
+sudo rm -f /usr/bin/passkey-tpm /usr/bin/passkey-tpm-tray
 sudo rm -f \
 	/usr/lib/systemd/system/passkey-tpm-uvd.service \
 	/usr/lib/systemd/user/passkey-tpm-agent.service \

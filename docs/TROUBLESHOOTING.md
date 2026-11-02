@@ -111,6 +111,35 @@ Rebuild and reinstall:
 The installer stops the running services before replacing them, so it is safe to
 run while everything is up.
 
+## The installer refuses to run: "not root-owned"
+
+`install.sh` checks every directory it writes into and stops when one of them is
+not owned by `root:root`, printing the offending path. That check exists because
+a system directory owned by a normal user can be replaced by any process running
+as that user, including `sudo` itself.
+
+An older version of the installer (`cp -a` of the staging tree) could cause this.
+The current installer installs file by file and verifies that the shared
+directories are unchanged afterwards, so it can no longer cause the drift, but it
+cannot repair a system that is already in that state.
+
+Repair the reported directories, then install again:
+
+```sh
+sudo chown root:root /usr /usr/bin /usr/lib /usr/share \
+	/usr/lib/systemd /usr/lib/udev /usr/lib/sysusers.d \
+	/usr/lib/modules-load.d /usr/share/doc /usr/share/dbus-1 \
+	/usr/share/polkit-1
+sudo chown -R root:root \
+	/usr/lib/passkey-tpm /usr/share/doc/passkey-tpm /usr/share/licenses/passkey-tpm
+sudo pacman -Qkk filesystem
+./install.sh --force
+```
+
+`./install.sh --force` reinstalls every managed file as `root:root`, including
+`/usr/bin/passkey-tpm-tray`, which earlier installs left user-owned. Afterwards,
+`find /usr -user "$USER"` should print nothing.
+
 ## Reading the logs
 
 ```sh
