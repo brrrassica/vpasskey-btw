@@ -1,0 +1,307 @@
+diff --git a/crates/core/src/ctap2/common.rs b/crates/core/src/ctap2/common.rs
+index 29d1f12..0baccaf 100644
+--- a/crates/core/src/ctap2/common.rs
++++ b/crates/core/src/ctap2/common.rs
+@@ -55,9 +55,15 @@ pub mod status {
+ 
+ /// AAGUID: all zero (packed self-attestation identifies no model; no tracking ID).
+ pub const AAGUID: [u8; 16] = [0; 16];
+-pub const MAX_MSG_SIZE: u64 = 2048;
++/// Largest CTAP message the HID layer accepts, and the `maxMsgSize` we advertise (0x05).
++///
++/// Taken from [`crate::ctaphid::MAX_MSG`] so the promise and the enforced limit cannot drift.
++pub const MAX_MSG_SIZE: u64 = crate::ctaphid::MAX_MSG as u64;
++/// Maximum credential IDs accepted in one list, and `maxCredentialCountInList` (0x07).
+ pub const MAX_CREDENTIAL_COUNT_IN_LIST: usize = 8;
+-pub const MAX_CREDENTIAL_ID_LENGTH: u64 = 1023;
++/// WebAuthn L3 credential-ID cap, shared with the wire format; also `maxCredentialIdLength`
++/// (0x08).
++pub const MAX_CREDENTIAL_ID_LENGTH: u64 = passkey_tpm_wire::credid::MAX_LEN as u64;
+ pub const MAX_RESIDENT: usize = 64;
+ pub const MIN_PIN_LENGTH: usize = 4;
+ /// COSE algorithm ES256.
+diff --git a/crates/core/src/ctap2/info.rs b/crates/core/src/ctap2/info.rs
+index 84b2d7a..12bf64f 100644
+--- a/crates/core/src/ctap2/info.rs
++++ b/crates/core/src/ctap2/info.rs
+@@ -1,4 +1,24 @@
+ //! authenticatorGetInfo (CTAP 2.1 §6.4, M2-01).
++//!
++//! Every member here is a promise the rest of the authenticator has to keep, so the 0.2.0
++//! audit (M3.1) checked each one against the implementation:
++//!
++//! - `plat` stays `false` on purpose: this is a virtual *cross-platform* security key, and
++//!   `true` would make platforms treat it as a platform authenticator (the wrong UI).
++//! - `uv` and `clientPin` are capability flags, not configuration: they stay present and
++//!   switch to `false` while the fingerprint is not enrolled or the PIN is not set.
++//! - `pinUvAuthToken` is true because both `getPinUvAuthTokenUsingPinWithPermissions` and
++//!   `getPinUvAuthTokenUsingUvWithPermissions` are implemented.
++//! - `makeCredUvNotRqd` is `false` because makeCredential always requires user verification
++//!   (fingerprint or a PIN token).
++//! - `alwaysUv` is absent because the toggleable Always-UV feature (with its CTAP1/U2F
++//!   consequences) is not implemented; per-operation UV enforcement plus
++//!   `makeCredUvNotRqd: false` carries the same information.
++//! - `authnrCfg`, `bioEnroll`, `largeBlobs`, `ep`, `credentialMgmtPreview`, `uvBioEnroll`,
++//!   `uvAcfg`, `setMinPINLength`, and `noMcGaPermissionsWithClientPin` are absent because the
++//!   matching commands or features are not implemented.
++//! - `extensions` lists only `credProtect` and `hmac-secret`, both implemented end to end.
++//! - the size, count, and ID-length limits are taken from the enforcing code, not literals.
+ 
+ use passkey_tpm_wire::cbor::Value;
+ 
+@@ -7,6 +27,11 @@ use super::common::{
+     MAX_MSG_SIZE, MIN_PIN_LENGTH,
+ };
+ 
++/// Fingerprint, from the FIDORegistry "User Verification Methods" bit-flags.
++///
++/// `clientPin` must not be included in `uvModality`: it is not a built-in verification method.
++const UV_MODALITY_FINGERPRINT: u64 = 0x02;
++
+ /// Facts about the user the response depends on.
+ #[derive(Debug, Clone, Copy)]
+ pub struct InfoFacts {
+@@ -15,8 +40,34 @@ pub struct InfoFacts {
+     pub remaining_resident: usize,
+ }
+ 
++/// One `major.minor.patch` field of `version`, or 0 when it is absent or unparsable.
++fn version_field(version: &str, index: usize) -> u64 {
++    version
++        .split(|c: char| !c.is_ascii_digit())
++        .filter(|part| !part.is_empty())
++        .nth(index)
++        .and_then(|part| part.parse::<u64>().ok())
++        .filter(|n| *n <= 0xFF)
++        .unwrap_or(0)
++}
++
++/// `firmwareVersion` encoding: `major << 16 | minor << 8 | patch` (CTAP 2.1 §6.4).
++///
++/// A pre-release suffix (`-beta.2`) is not representable and is dropped, but the numeric
++/// release still changes, which is what the spec requires ("MUST increase the version").
++#[must_use]
++pub fn encode_firmware_version(version: &str) -> u64 {
++    (version_field(version, 0) << 16) | (version_field(version, 1) << 8) | version_field(version, 2)
++}
++
++/// The advertised `firmwareVersion`, derived from the crate version so it cannot go stale.
++#[must_use]
++pub fn firmware_version() -> u64 {
++    encode_firmware_version(env!("CARGO_PKG_VERSION"))
++}
++
+ pub fn get_info(f: InfoFacts) -> Vec<u8> {
+-    let count = |n: usize| Value::Uint(u64::try_from(n).unwrap_or(u64::MAX));
++    let count = |n: u64| Value::Uint(n);
+     ok(&Value::Map(vec![
+         (
+             int(0x01),
+@@ -32,9 +83,11 @@ pub fn get_info(f: InfoFacts) -> Vec<u8> {
+             Value::Map(vec![
+                 (text("rk"), Value::Bool(true)),
+                 (text("up"), Value::Bool(true)),
++                // Built-in UV exists; `false` means "capable but not configured" (§6.4).
+                 (text("uv"), Value::Bool(f.uv_enrolled)),
+                 (text("plat"), Value::Bool(false)),
+                 (text("credMgmt"), Value::Bool(true)),
++                // Both token subcommands exist; `false` means "supported, no PIN set".
+                 (text("clientPin"), Value::Bool(f.pin_set)),
+                 (text("pinUvAuthToken"), Value::Bool(true)),
+                 (text("makeCredUvNotRqd"), Value::Bool(false)),
+@@ -45,7 +98,7 @@ pub fn get_info(f: InfoFacts) -> Vec<u8> {
+             int(0x06),
+             Value::Array(vec![Value::Uint(2), Value::Uint(1)]),
+         ),
+-        (int(0x07), count(MAX_CREDENTIAL_COUNT_IN_LIST)),
++        (int(0x07), count(MAX_CREDENTIAL_COUNT_IN_LIST as u64)),
+         (int(0x08), Value::Uint(MAX_CREDENTIAL_ID_LENGTH)),
+         (int(0x09), Value::Array(vec![text("usb")])),
+         (
+@@ -55,8 +108,31 @@ pub fn get_info(f: InfoFacts) -> Vec<u8> {
+                 (text("type"), text("public-key")),
+             ])]),
+         ),
+-        (int(0x0D), count(MIN_PIN_LENGTH)),
+-        (int(0x0E), Value::Uint(0x0002_0000)),
+-        (int(0x14), count(f.remaining_resident)),
++        (int(0x0D), count(MIN_PIN_LENGTH as u64)),
++        (int(0x0E), Value::Uint(firmware_version())),
++        // Hint for the platform's UV dialog; matches how UV is actually performed.
++        (int(0x12), Value::Uint(UV_MODALITY_FINGERPRINT)),
++        (int(0x14), count(f.remaining_resident as u64)),
+     ]))
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn firmware_version_is_a_derived_encoding() {
++        assert_eq!(encode_firmware_version("0.1.0-beta.2"), 0x0000_0100);
++        assert_eq!(encode_firmware_version("0.2.0"), 0x0000_0200);
++        assert_eq!(encode_firmware_version("2.3.4"), 0x0002_0304);
++        // Missing or junk fields degrade to 0 instead of panicking.
++        assert_eq!(encode_firmware_version("7"), 0x0007_0000);
++        assert_eq!(encode_firmware_version(""), 0);
++        assert_eq!(encode_firmware_version("not-a-version"), 0);
++        // The advertised value always follows the crate version.
++        assert_eq!(
++            firmware_version(),
++            encode_firmware_version(env!("CARGO_PKG_VERSION"))
++        );
++    }
++}
+diff --git a/crates/core/src/ctap2/tests.rs b/crates/core/src/ctap2/tests.rs
+index a6eb2ac..1c3ebbe 100644
+--- a/crates/core/src/ctap2/tests.rs
++++ b/crates/core/src/ctap2/tests.rs
+@@ -4,7 +4,10 @@ use passkey_tpm_wire::cbor::{self, Value};
+ use passkey_tpm_wire::credid::KeyBlobs;
+ use proptest::prelude::*;
+ 
+-use super::common::{cmd, get, get_text, int, sha256, status, text, AAGUID, MAX_UV_RETRIES};
++use super::common::{
++    cmd, get, get_text, int, sha256, status, text, AAGUID, MAX_CREDENTIAL_COUNT_IN_LIST,
++    MAX_MSG_SIZE, MAX_UV_RETRIES,
++};
+ use super::{Authenticator, Step, UserInfo, UvOutcome};
+ use crate::evidence::UvEvidence;
+ use crate::gates::GateKind;
+@@ -449,6 +452,135 @@ fn get_info_advertises_ctap_2_1() {
+     );
+ }
+ 
++/// M3.1: the advertisement must match the implementation, and nothing unimplemented may be
++/// advertised. A wrong value here silently changes what every platform offers the user, so
++/// each member and option is pinned to the code that enforces it.
++#[test]
++fn get_info_advertisement_matches_implemented_features() {
++    let mut a = auth();
++    let info = body(&done(prep(&mut a, ALICE, &[cmd::GET_INFO])));
++
++    // Members a platform may act on.
++    for key in [
++        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0D, 0x0E, 0x12, 0x14,
++    ] {
++        assert!(get(&info, key).is_some(), "missing member {key:#04x}");
++    }
++    // Features with no implementation must not be advertised.
++    for key in [0x0B, 0x0C, 0x0F, 0x10, 0x11, 0x13, 0x15] {
++        assert!(
++            get(&info, key).is_none(),
++            "member {key:#04x} must be absent"
++        );
++    }
++
++    assert_eq!(
++        get(&info, 1),
++        Some(&Value::Array(vec![text("FIDO_2_0"), text("FIDO_2_1")]))
++    );
++    assert_eq!(
++        get(&info, 2),
++        Some(&Value::Array(vec![
++            text("credProtect"),
++            text("hmac-secret")
++        ]))
++    );
++    assert_eq!(
++        get(&info, 5),
++        Some(&Value::Uint(MAX_MSG_SIZE)),
++        "maxMsgSize"
++    );
++    assert_eq!(
++        MAX_MSG_SIZE,
++        crate::ctaphid::MAX_MSG as u64,
++        "maxMsgSize must be the enforced HID limit"
++    );
++    assert_eq!(
++        get(&info, 6),
++        Some(&Value::Array(vec![Value::Uint(2), Value::Uint(1)])),
++        "both PIN/UV auth protocols are implemented"
++    );
++    assert_eq!(
++        get(&info, 7),
++        Some(&Value::Uint(MAX_CREDENTIAL_COUNT_IN_LIST as u64))
++    );
++    assert_eq!(
++        get(&info, 8),
++        Some(&Value::Uint(passkey_tpm_wire::credid::MAX_LEN as u64))
++    );
++    assert_eq!(get(&info, 9), Some(&Value::Array(vec![text("usb")])));
++    assert_eq!(get(&info, 0x0D), Some(&Value::Uint(4)), "minPINLength");
++    assert_eq!(
++        get(&info, 0x0E),
++        Some(&Value::Uint(super::info::firmware_version())),
++        "firmwareVersion follows the crate version"
++    );
++    assert_eq!(
++        get(&info, 0x12),
++        Some(&Value::Uint(0x02)),
++        "uvModality is fingerprint"
++    );
++    assert_eq!(get(&info, 0x14), Some(&Value::Uint(64)), "remaining rk");
++
++    // Options are capability flags, not current configuration.
++    let opts = get(&info, 4).unwrap();
++    for (name, value) in [
++        ("rk", true),
++        ("up", true),
++        ("uv", true),
++        ("plat", false),
++        ("credMgmt", true),
++        ("clientPin", false),
++        ("pinUvAuthToken", true),
++        ("makeCredUvNotRqd", false),
++    ] {
++        assert_eq!(get_text(opts, name), Some(&Value::Bool(value)), "{name}");
++    }
++    for name in [
++        "alwaysUv",
++        "authnrCfg",
++        "bioEnroll",
++        "largeBlobs",
++        "ep",
++        "noMcGaPermissionsWithClientPin",
++        "setMinPINLength",
++        "credentialMgmtPreview",
++        "userVerificationMgmtPreview",
++        "uvBioEnroll",
++        "uvAcfg",
++    ] {
++        assert_eq!(get_text(opts, name), None, "{name} must not be advertised");
++    }
++
++    // A missing finger keeps `uv` present and turns it false; a missing PIN does the same for
++    // `clientPin`. Both mean "capable, not configured" (CTAP 2.1 §6.4), not "unsupported".
++    let no_reader = body(&done(a.prepare(ALICE, NO_READER, &[cmd::GET_INFO], 1_000)));
++    let opts = get(&no_reader, 4).unwrap();
++    assert_eq!(get_text(opts, "uv"), Some(&Value::Bool(false)));
++    assert_eq!(get_text(opts, "clientPin"), Some(&Value::Bool(false)));
++
++    // The advertised boundary values are enforced, not decorative: a resident credential
++    // draws down `remainingDiscoverableCredentials`, and one ID over the advertised list
++    // limit is rejected.
++    let _ = register(
++        &mut a,
++        vec![(int(7), Value::Map(vec![(text("rk"), Value::Bool(true))]))],
++    );
++    let info = body(&done(prep(&mut a, ALICE, &[cmd::GET_INFO])));
++    assert_eq!(get(&info, 0x14), Some(&Value::Uint(63)));
++
++    let over_limit = u8::try_from(MAX_CREDENTIAL_COUNT_IN_LIST).unwrap();
++    let too_many: Vec<Value> = (0..=over_limit).map(|i| descriptor(&[i])).collect();
++    assert_eq!(
++        done(prep(
++            &mut a,
++            ALICE,
++            &req(cmd::GET_ASSERTION, ga_params(Some(too_many), vec![]))
++        )),
++        vec![status::LIMIT_EXCEEDED]
++    );
++}
++
+ #[test]
+ fn gesture_registration_and_assertion_still_work() {
+     let mut a = auth();

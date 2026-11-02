@@ -21,6 +21,17 @@ so `versions.env` keeps its integrity check.
   - M4.1/M4.2: prompt backend selection (`PASSKEY_PROMPT=auto|native|polkit|notification|terminal`),
     Omarchy/Hyprland/Wayland detection, and `passkey-tpm-agent --probe-prompt` (also used by
     `verify.sh --prompt`). The full-screen native overlay itself is still M4.3.
+- `0002-0.2.0-getinfo-advertisement-audit.patch`
+  - M3.1: `firmwareVersion` is derived from the crate version instead of the stale literal
+    `0x00020000` (which claimed 2.0.0 for a 0.1.0-beta.2 authenticator).
+  - M3.1: advertise `uvModality` (0x12) as fingerprint, matching how UV is actually done.
+  - M3.1: `maxMsgSize` and `maxCredentialIdLength` now come from the enforcing constants
+    (`ctaphid::MAX_MSG`, `credid::MAX_LEN`) instead of duplicated literals.
+  - M3.1: a table-driven `getInfo` regression test pins every member and option, including
+    the capability-vs-configuration semantics of `uv` and `clientPin`.
+  - No option values changed: `plat: false`, `clientPin: pin_set`, `uv: uv_enrolled`,
+    `makeCredUvNotRqd: false`, and the absences (`alwaysUv`, `authnrCfg`, `bioEnroll`,
+    `largeBlobs`, `ep`, `setMinPINLength`, …) were audited and are correct.
 
 ## Refreshing a patch
 
