@@ -1,0 +1,48 @@
+site_name: vpasskey-btw
+site_description: Use your laptop's fingerprint reader for passkeys on Linux.
+site_url: https://brrrassica.github.io/vpasskey-btw/
+repo_url: https://github.com/brrrassica/vpasskey-btw
+repo_name: brrrassica/vpasskey-btw
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Install: INSTALL.md
+  - Usage: USAGE.md
+  - How it works: HOW-IT-WORKS.md
+  - Compatibility: COMPATIBILITY.md
+  - Troubleshooting: TROUBLESHOOTING.md
+  - Credits: CREDITS.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences

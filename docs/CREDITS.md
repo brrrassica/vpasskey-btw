@@ -12,7 +12,8 @@ Henrique ([@dangerousplay](https://github.com/dangerousplay))**.
 - License: MIT OR Apache-2.0
 - It implements the TPM-backed virtual security key, the broker/agent split, the
   CTAP2 logic, the fprintd user verification, and the packaging files.
-- This project pins it at tag `v0.1.0-beta.1` and builds it from source.
+- This project pins it through `versions.env`, currently `v0.1.0-beta.2`, builds
+  it from source, and applies the local patches in `patches/`.
 
 If you find a bug in the passkey behaviour itself, it most likely belongs
 upstream.
@@ -47,7 +48,7 @@ Related prior art worth knowing:
 
 Installer, scripts, test page, and documentation: **MIT © 2026 Sam Ralial**.
 
-See [../LICENSE](../LICENSE).
+See [LICENSE](https://github.com/brrrassica/vpasskey-btw/blob/main/LICENSE).
 
 ## Trademarks
 

@@ -5,49 +5,44 @@
 Chrome, Chromium, Brave, and Firefox normally can't use passkeys on Linux
 without a USB security key or a browser extension. This project turns your
 laptop itself into a passkey authenticator: your **TPM** stores the keys and
-your **fingerprint** (through `fprintd`) approves each login.
+your **fingerprint** approves each login.
 
 No USB dongle. No browser extension. No cloud account.
 
 > Built for **Omarchy / Arch Linux**. Verified on a Lenovo ThinkPad E14 Gen 4
 > (AMD) with a Goodix 550A fingerprint sensor.
 
----
+## Why this exists
 
-## The problem this solves
-
-If a website (GitHub, for example) has told you:
+Many sites tell Linux users:
 
 > *"This browser or device is reporting partial passkey support."*
 
-…that is because Linux browsers have no built-in *platform authenticator* — the
-thing that makes Touch ID on a Mac or Windows Hello on a PC work. Your browser
-can do passkeys, but it has nowhere local to keep them and no way to check it's
-really you.
+Linux browsers can create passkeys, but they have no built-in *platform
+authenticator* — the local "this is really me" check that Touch ID and Windows
+Hello provide. Without one, passkeys need an external key.
 
-`vpasskey-btw` gives it both.
+`vpasskey-btw` gives the system that missing piece.
 
 ## What you get
 
-A small background service presents a **virtual FIDO2 security key** to the
-system. Browsers see it exactly like a plugged-in YubiKey, except:
+A small background service presents a **virtual security key** to every native
+browser. Browsers treat it like a plugged-in FIDO2 key, except:
 
-- the private keys live in your **TPM 2.0** and never leave the machine,
-- each use asks for your **fingerprint** instead of a button press,
-- it works in **every native browser at once** — nothing to install in the browser.
-
----
+- the private keys stay in your **TPM 2.0** and never leave the machine;
+- each use asks for your **fingerprint** rather than a button press;
+- it works in all native browsers at once, with nothing to install in the
+  browser.
 
 ## Requirements
 
-| Need | Check |
-|---|---|
-| Linux with a TPM 2.0 | `ls /dev/tpmrm0` |
-| A fingerprint reader supported by `fprintd`, with a finger enrolled | `fprintd-list "$USER"` |
-| systemd, D-Bus, polkit | (standard on Arch/Omarchy) |
-| A native browser (Chrome/Chromium/Brave/Firefox) | Snap/Flatpak browsers can't reach the device |
+- Linux with a TPM 2.0.
+- A fingerprint reader that Linux supports, with at least one finger enrolled.
+- A standard Arch/Omarchy desktop (systemd, D-Bus, and polkit).
+- A native browser. Snap and Flatpak browsers are sandboxed away from the
+  virtual key and will not work.
 
-Rust is only needed if you build from source; the installer handles that too.
+See [docs/INSTALL.md](docs/INSTALL.md) for exact checks and supported setups.
 
 ## Install
 
@@ -57,104 +52,101 @@ cd vpasskey-btw
 ./install.sh
 ```
 
-The installer builds the authenticator from source, installs a few system files,
-and starts it. You'll be asked for your password **once**.
+The installer builds the authenticator, installs the system integration, and
+starts it. You will be asked for your password once.
 
-Then make sure it's alive:
+Check that it is running:
 
 ```sh
 ./verify.sh
 ```
 
-You should see the virtual key listed as something like
-`/dev/hidrawN: vendor=0x1209, product=0xf1d0 ( passkey-tpm)`.
+For a full registration and login test, see [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Use it
 
-1. Open a site that supports passkeys (try <https://webauthn.io>).
+1. Open a site that supports passkeys, such as <https://webauthn.io>.
 2. Choose to add a passkey or a security key.
-3. When the browser asks where to save it, pick **"Use a security key"**.
+3. When the browser asks where to keep it, choose **"Use a security key"**.
 4. **Hold your finger on the reader for about a second.**
 
-That's it. Next login, do the same.
+That is all. Next time, choose the same option and touch the reader again.
 
-> **Tip: hold, don't tap.** A quick tap can time out before the sensor finishes.
-> If a scan doesn't take, the reader will ask again — just try once more.
+> **Hold, don't tap.** A quick tap can end before the sensor finishes.
 
-### Try it locally (no third-party site)
+A step-by-step guide, including optional PIN setup and local testing, is in
+[docs/USAGE.md](docs/USAGE.md).
 
-```sh
-python3 -m http.server 8765 --directory .
-google-chrome-stable http://localhost:8765/browser-test.html
-```
+## Status and compatibility
 
-Click **Register passkey**, choose **Use a security key**, and touch the reader.
-Use `localhost`, **not** `127.0.0.1` — WebAuthn rejects IP-address sites.
+Verified on the reference Omarchy machine in Chrome and Chromium:
 
-## Verify
+- Cloudflare sign-in and OpenRouter registration and sign-in work through the
+  security-key path.
+- Passkeys created earlier for GitHub and webauthn.io remain valid.
+- The GitHub-style *"partial passkey support"* warning may remain. It does not
+  stop passkeys from working.
+- If a site rejects a passkey that used to work, delete that passkey on the site
+  and register it again.
 
-```sh
-./verify.sh         # checks services, device, TPM and fingerprint enrolment
-./verify.sh --bio   # full register + login, touching the reader twice
-```
-
-A passing biometric run ends with:
-
-```
-OK: registration and UV assertion verified
-```
-
----
+The full matrix, including what has not been re-tested, is in
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Troubleshooting
 
-The full list is in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md). The
-common ones:
+Start with the site-specific notes in
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), then the full guide in
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-| Symptom | Try |
-|---|---|
-| Browser finds no security key | `systemctl --user status passkey-tpm-agent` |
-| Fingerprint never accepted | Hold longer; check `fprintd-verify` works |
-| GitHub still says *"partial passkey support"* | Expected on Linux — see [Why](#the-problem-this-solves) and [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) |
-| Nothing works after a reboot | `passkey-tpm info` and `systemctl --user enable --now passkey-tpm-agent` |
+The most common fixes are holding the finger longer and confirming that the
+background service is running. Both are covered in the troubleshooting guide.
 
 ## Uninstall
 
 ```sh
-./uninstall.sh          # keeps your registered passkeys
-./uninstall.sh --purge  # also deletes the passkeys and the service user
+./uninstall.sh          # removes the software, keeps your passkeys
+./uninstall.sh --purge  # also deletes your passkeys and the service user
 ```
 
-Then reboot, or log out and back in.
+See [docs/INSTALL.md](docs/INSTALL.md) for details and for how to pause it
+temporarily.
 
-## Security & honest limits
+## Security and honest limits
 
 - Passkeys are bound to **this machine and this user**. They cannot be copied to
-  another computer, and other users can't use them.
-- Wiping the TPM or `/var/lib/passkey-tpm` **invalidates every passkey** here.
-  Always keep a recovery method (another key or recovery codes) for important
-  accounts.
-- The underlying authenticator is **pre-alpha and has not had a security review**.
+  another computer, and other accounts cannot use them.
+- Wiping the TPM or the local credential store **invalidates every passkey**.
+  Keep a recovery method for important accounts.
+- The upstream authenticator is **pre-alpha and has not had a security review**.
   Use it as a convenience, not as your only way in.
-- The GitHub *"partial passkey support"* banner **may remain**. No non-patched
-  Linux browser exposes a true platform authenticator, so sites that test for one
-  will still warn. Your passkeys still work — through the *security key* path.
+- It presents as a **security key**, not a true platform authenticator, so sites
+  that require a built-in authenticator may still warn or refuse.
+
+The security model and architecture are explained in
+[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
+
+## Documentation
+
+| Guide | What it covers |
+|---|---|
+| [Install](docs/INSTALL.md) | requirements, installation, verification, uninstall |
+| [Usage](docs/USAGE.md) | registering, signing in, PINs, managing passkeys |
+| [How it works](docs/HOW-IT-WORKS.md) | architecture and security model |
+| [Compatibility](docs/COMPATIBILITY.md) | tested browsers and sites, known limits |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | diagnosing and fixing problems |
+| [Credits](docs/CREDITS.md) | upstream projects and licenses |
 
 ## Credits
 
-This repository is a friendly installer, documentation, and test harness around
+`vpasskey-btw` is an installer, documentation, and test harness around
 **[passkey-tpm](https://github.com/dangerousplay/passkey-tpm)** by **Davi
-Henrique ([@dangerousplay](https://github.com/dangerousplay))** — the actual
-authenticator. Thank you.
+Henrique ([@dangerousplay](https://github.com/dangerousplay))**. Thank you.
 
-The virtual-FIDO-key idea descends from
-**[psanford/tpm-fido](https://github.com/psanford/tpm-fido)** and the ThinkPad
-work at **[mc256/tpm-fido2-thinkpad-linux](https://github.com/mc256/tpm-fido2-thinkpad-linux)**.
-
-Full attributions and licenses: [docs/CREDITS.md](docs/CREDITS.md).
+Full attributions, the upstream pin, and related prior art are in
+[docs/CREDITS.md](docs/CREDITS.md).
 
 ## License
 
 MIT © 2026 Sam Ralial. The upstream `passkey-tpm` is licensed **MIT OR
-Apache-2.0** and is downloaded at install time; see
+Apache-2.0** and is built from source at install time; see
 [docs/CREDITS.md](docs/CREDITS.md).
