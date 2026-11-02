@@ -71,8 +71,15 @@ with `OK: registration and UV assertion verified`.
 | `/usr/lib/systemd/system/passkey-tpm-uvd.service` | system service (starts on demand) |
 | `/usr/lib/systemd/user/passkey-tpm-agent.service` | your session service (starts at login) |
 | `/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules` | lets your user create the virtual key |
-| `/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules` | lets the service verify your fingerprint |
+| `/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules` | lets the service verify your fingerprint directly |
+| `/usr/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy` | the desktop prompt action for fingerprint approval |
 | `/var/lib/passkey-tpm` | your passkeys (TPM-wrapped) |
+
+On Omarchy, a passkey operation opens the same polkit dialog as `sudo`: the
+agent shows the fingerprint card because `pam_fprintd.so` is in
+`/etc/pam.d/polkit-1`. The broker still owns the verification decision; when
+that PAM module is absent it falls back to driving `fprintd` itself and the
+session agent shows a notification.
 
 ## Uninstall
 

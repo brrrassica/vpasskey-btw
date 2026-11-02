@@ -98,6 +98,7 @@ sudo rm -f \
 	/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf \
 	/usr/share/dbus-1/system-services/io.github.dangerousplay.PasskeyTpm1.service \
 	/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules \
+	/usr/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy \
 	/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules \
 	/usr/lib/modules-load.d/passkey-tpm.conf \
 	/usr/lib/sysusers.d/passkey-tpm.conf

@@ -32,6 +32,24 @@ so `versions.env` keeps its integrity check.
   - No option values changed: `plat: false`, `clientPin: pin_set`, `uv: uv_enrolled`,
     `makeCredUvNotRqd: false`, and the absences (`alwaysUv`, `authnrCfg`, `bioEnroll`,
     `largeBlobs`, `ep`, `setMinPINLength`, …) were audited and are correct.
+- `0003-0.2.0-polkit-fingerprint-prompt.patch`
+  - M4.5: reuse the desktop polkit prompt instead of a private overlay. When
+    `io.github.dangerousplay.PasskeyTpm1.policy` is installed and
+    `/etc/pam.d/polkit-1` contains `pam_fprintd.so`, the broker calls
+    `CheckAuthorization` with the calling agent's `system-bus-name` and
+    `AllowUserInteraction`; Omarchy's polkit agent shows its fingerprint card and
+    PAM performs the scan. The action is owned by `unix-user:passkey-tpm` (polkit
+    127 trust), and uses `auth_self` without `_keep` so every operation
+    re-authenticates.
+  - The broker and agent both detect the same precondition
+    (`passkey_tpm_uv::polkit::available`); the agent suppresses its toast while
+    the broker drives the desktop dialog. If the action or `pam_fprintd` is
+    absent, the old direct-fprintd + notification path is unchanged.
+  - Adds `UvMethod::Polkit` / `UvEvidence::from_polkit_authorization` so the
+    evidence records that the desktop PAM stack authorized the request.
+  - Packaging: `packaging/polkit/io.github.dangerousplay.PasskeyTpm1.policy`,
+    installed by `cargo xtask dist`; the wrapper's install/uninstall lists are
+    updated.
 
 ## Refreshing a patch
 

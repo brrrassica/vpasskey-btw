@@ -1,0 +1,720 @@
+diff --git a/crates/agent/src/main.rs b/crates/agent/src/main.rs
+index 74db093..c94fcd7 100644
+--- a/crates/agent/src/main.rs
++++ b/crates/agent/src/main.rs
+@@ -282,9 +282,16 @@ fn open_device(
+     Ok(writer)
+ }
+ 
+-/// Asks for a fingerprint through the selected backend. Native/polkit are not built yet, so
+-/// they fall back to the notification rather than leaving the user without a prompt.
++/// Asks for a fingerprint through the selected backend.
++///
++/// The polkit backend is rendered by the broker's `CheckAuthorization` in the desktop
++/// agent; this process must stay quiet then, or the user sees the native card and a toast
++/// for the same request. Native (M4.3) is not built yet and falls back to the notification.
+ fn prompt_user(backend: prompt::Backend, rp: String, notes: &std_mpsc::Sender<Note>) {
++    if passkey_tpm_uv::polkit::available() {
++        // The broker selected the desktop prompt; do not duplicate it.
++        return;
++    }
+     match backend {
+         prompt::Backend::Terminal => {
+             eprintln!("Touch the fingerprint reader to continue with {rp}");
+@@ -294,7 +301,7 @@ fn prompt_user(backend: prompt::Backend, rp: String, notes: &std_mpsc::Sender<No
+         }
+         prompt::Backend::Native | prompt::Backend::Polkit => {
+             eprintln!(
+-                "{} prompt backend is not built yet; using a notification",
++                "{} prompt backend is unavailable; using a notification",
+                 backend.as_str()
+             );
+             let _ = notes.send(Note::Fingerprint(rp));
+diff --git a/crates/agent/src/prompt.rs b/crates/agent/src/prompt.rs
+index 46690a3..49dd0fa 100644
+--- a/crates/agent/src/prompt.rs
++++ b/crates/agent/src/prompt.rs
+@@ -1,10 +1,14 @@
+ //! Prompt backend selection and Omarchy detection (0.2.0 M4.1/M4.2).
+ //!
+-//! The full-screen layer-shell overlay (M4.3) is not part of this foundation, but the
+-//! selection logic is: [`Detection`] inspects the session, [`select`] honours
++//! The selection logic is: [`Detection`] inspects the session, [`select`] honours
+ //! `PASSKEY_PROMPT=auto|native|polkit|notification|terminal`, and the agent uses the result
+-//! to decide how to ask for a fingerprint. Detection is advisory: an unavailable native
+-//! backend must fall through to a notification, never fail the passkey operation.
++//! to decide how to ask for a fingerprint. Detection is advisory: an unavailable backend
++//! must fall through to a notification, never fail the passkey operation.
++//!
++//! The polkit backend is driven by the broker, not by this agent: when the installed action
++//! and `/etc/pam.d/polkit-1` (with `pam_fprintd.so`) support it, the broker calls
++//! `CheckAuthorization` and the desktop agent shows the prompt. In that mode the agent adds
++//! no notification, so the user sees only the native card.
+ 
+ use std::path::{Path, PathBuf};
+ 
+@@ -36,6 +40,8 @@ impl Backend {
+ /// Session facts collected once at agent start.
+ #[derive(Debug, Default, Clone, PartialEq, Eq)]
+ pub struct Detection {
++    /// The broker will use the installed polkit action + `pam_fprintd` desktop prompt.
++    pub polkit_prompt: bool,
+     /// `omarchy` is on `PATH`.
+     pub omarchy_command: bool,
+     /// `OMARCHY_PATH` is set.
+@@ -76,6 +82,7 @@ impl Detection {
+         let wayland_by_type =
+             std::env::var("XDG_SESSION_TYPE").is_ok_and(|v| v.eq_ignore_ascii_case("wayland"));
+         Self {
++            polkit_prompt: passkey_tpm_uv::polkit::available(),
+             omarchy_command: command_in_path("omarchy"),
+             omarchy_path: non_empty_env("OMARCHY_PATH"),
+             omarchy_data_dir: std::env::var_os("HOME")
+@@ -110,7 +117,8 @@ impl Detection {
+     fn summary(&self) -> String {
+         let yes = |v: bool| if v { "yes" } else { "no" };
+         format!(
+-            "omarchy: cmd={} path={} data={} release={}; hyprland={} wayland={} hyprctl={}",
++            "polkit={}; omarchy: cmd={} path={} data={} release={}; hyprland={} wayland={} hyprctl={}",
++            yes(self.polkit_prompt),
+             yes(self.omarchy_command),
+             yes(self.omarchy_path),
+             yes(self.omarchy_data_dir),
+@@ -123,7 +131,10 @@ impl Detection {
+ }
+ 
+ fn automatic_backend(detection: &Detection, graphical: bool) -> Backend {
+-    if detection.can_use_native() {
++    if detection.polkit_prompt && graphical {
++        // The broker shows the native desktop card; the agent stays quiet.
++        Backend::Polkit
++    } else if detection.can_use_native() {
+         Backend::Native
+     } else if graphical {
+         Backend::Notification
+@@ -134,13 +145,13 @@ fn automatic_backend(detection: &Detection, graphical: bool) -> Backend {
+ 
+ /// Resolves `PASSKEY_PROMPT` against the detected session.
+ ///
+-/// An explicitly requested `native` backend that the session cannot support falls back the
+-/// same way `auto` would, so a stale environment variable cannot break passkey operations.
++/// An explicitly requested backend that the session cannot support falls back the same way
++/// `auto` would, so a stale environment variable cannot break passkey operations.
+ #[must_use]
+ pub fn select(requested: Option<&str>, detection: &Detection, graphical: bool) -> Backend {
+     match requested.unwrap_or("auto").to_ascii_lowercase().as_str() {
+         "native" if detection.can_use_native() => Backend::Native,
+-        "polkit" => Backend::Polkit,
++        "polkit" if detection.polkit_prompt && graphical => Backend::Polkit,
+         "notification" => Backend::Notification,
+         "terminal" => Backend::Terminal,
+         _ => automatic_backend(detection, graphical),
+@@ -151,8 +162,11 @@ pub fn select(requested: Option<&str>, detection: &Detection, graphical: bool) -
+ #[must_use]
+ pub fn report(detection: &Detection, backend: Backend) -> String {
+     let note = match backend {
+-        Backend::Native | Backend::Polkit => {
+-            "\nnote: this backend is not built yet; the agent falls back to a notification"
++        Backend::Polkit => {
++            "\nnote: the broker shows the desktop authentication dialog; the agent adds no notification"
++        }
++        Backend::Native => {
++            "\nnote: the full-screen overlay is not built yet; the agent falls back to a notification"
+         }
+         Backend::Notification | Backend::Terminal => "",
+     };
+@@ -177,6 +191,26 @@ mod tests {
+         }
+     }
+ 
++    fn polkit_detection(wayland: bool) -> Detection {
++        Detection {
++            polkit_prompt: true,
++            wayland_session: wayland,
++            ..Detection::default()
++        }
++    }
++
++    #[test]
++    fn auto_prefers_polkit_when_the_broker_can_prompt() {
++        let d = polkit_detection(true);
++        assert_eq!(select(None, &d, true), Backend::Polkit);
++    }
++
++    #[test]
++    fn auto_does_not_pick_polkit_without_a_graphical_session() {
++        let d = polkit_detection(false);
++        assert_eq!(select(None, &d, false), Backend::Terminal);
++    }
++
+     #[test]
+     fn auto_prefers_native_on_omarchy_wayland() {
+         let d = detection(true, true, true);
+@@ -202,16 +236,26 @@ mod tests {
+         assert_eq!(select(Some("native"), &d, false), Backend::Terminal);
+     }
+ 
++    #[test]
++    fn explicit_polkit_falls_back_when_unsupported() {
++        let d = detection(false, false, true);
++        assert_eq!(select(Some("polkit"), &d, true), Backend::Notification);
++    }
++
+     #[test]
+     fn explicit_backends_are_honoured() {
+         let d = detection(true, true, true);
+-        assert_eq!(select(Some("polkit"), &d, true), Backend::Polkit);
++        assert_eq!(select(Some("polkit"), &d, true), Backend::Native);
+         assert_eq!(
+             select(Some("notification"), &d, true),
+             Backend::Notification
+         );
+         assert_eq!(select(Some("terminal"), &d, true), Backend::Terminal);
+         assert_eq!(select(Some("native"), &d, true), Backend::Native);
++        assert_eq!(
++            select(Some("polkit"), &polkit_detection(true), true),
++            Backend::Polkit
++        );
+     }
+ 
+     #[test]
+diff --git a/crates/core/src/evidence.rs b/crates/core/src/evidence.rs
+index 2d89556..7df11af 100644
+--- a/crates/core/src/evidence.rs
++++ b/crates/core/src/evidence.rs
+@@ -1,8 +1,10 @@
+ //! User-verification evidence and the authenticator-data flags it allows (MVP1-05).
+ //!
+-//! A [`UvEvidence`] value stands for "fprintd reported `verify-match` for this uid during
+-//! this request". The broker creates one only after that happens, and the core consumes it
+-//! to build authenticator data and to choose the TPM gate. Verus proves the UV flag is set
++//! A [`UvEvidence`] value stands for "the broker verified this uid during this request":
++//! either fprintd reported `verify-match`, or polkit authorized the caller through the
++//! desktop prompt (whose PAM stack performs the scan). The broker creates one only after
++//! that happens, and the core consumes it to build authenticator data and to choose the
++//! TPM gate. Verus proves the UV flag is set
+ //! exactly when evidence is present, and that evidence always selects a UV gate, so the TPM
+ //! policy and the flags in the signed data can't disagree.
+ 
+@@ -23,6 +25,10 @@ pub const FLAG_ED: u8 = 0x80;
+ pub enum UvMethod {
+     /// fprintd reported `verify-match` in this request.
+     Fingerprint,
++    /// polkit authorized the caller through the desktop prompt in this request. PAM
++    /// performed the check; Omarchy's agent uses the fingerprint reader when
++    /// `pam_fprintd.so` is in `/etc/pam.d/polkit-1`.
++    Polkit,
+     /// A valid pinUvAuthParam on a token with `userVerified` (PIN or earlier fingerprint).
+     PinUvAuthToken,
+ }
+@@ -48,6 +54,16 @@ impl UvEvidence {
+         UvEvidence { uid, method: UvMethod::Fingerprint }
+     }
+ 
++    /// Call **only** after polkit authorized `uid` for the passkey action in this request.
++    /// The desktop PAM stack performed the verification (fingerprint, or its configured
++    /// password fallback). Deliberately not `Clone`: one authorization, one use.
++    pub fn from_polkit_authorization(uid: u32) -> (ev: Self)
++        ensures
++            ev.spec_uid() == uid,
++    {
++        UvEvidence { uid, method: UvMethod::Polkit }
++    }
++
+     /// Call **only** after verifying a pinUvAuthParam against a token issued to `uid` with
+     /// `userVerified` set.
+     pub fn from_token(uid: u32) -> (ev: Self)
+@@ -152,6 +168,10 @@ mod tests {
+         let ad = auth_data(&[7; 32], &ev, None, Some(&[0xa0]));
+         assert_eq!(ad[32], FLAG_UP | FLAG_UV | FLAG_ED);
+         assert_eq!(UvEvidence::from_token(5).method(), UvMethod::PinUvAuthToken);
++        let polkit = UvEvidence::from_polkit_authorization(1000);
++        assert_eq!(polkit.method(), UvMethod::Polkit);
++        assert_eq!(polkit.uid(), 1000);
++        assert_eq!(polkit.gate(), GateKind::Uv);
+         assert_eq!(ev.gate(), GateKind::Uv);
+         assert_eq!(ev.uid(), 1000);
+     }
+diff --git a/crates/tray/tests/pin.rs b/crates/tray/tests/pin.rs
+index 827e27a..a1a4c29 100644
+--- a/crates/tray/tests/pin.rs
++++ b/crates/tray/tests/pin.rs
+@@ -47,6 +47,7 @@ async fn set_then_change_the_pin_through_the_broker() {
+         Box::new(Alice),
+         Box::new(AtSeat),
+         Duration::from_secs(5),
++        passkey_tpm_uvd::PromptBackend::Fprintd,
+     );
+     serve(&broker_conn, broker).await.unwrap();
+     let client = bus.connect().await;
+diff --git a/crates/uv/src/lib.rs b/crates/uv/src/lib.rs
+index bf75ece..d814598 100644
+--- a/crates/uv/src/lib.rs
++++ b/crates/uv/src/lib.rs
+@@ -9,6 +9,7 @@
+ #![forbid(unsafe_code)]
+ 
+ pub mod fprintd;
++pub mod polkit;
+ pub mod seat;
+ 
+ #[cfg(feature = "mock")]
+diff --git a/crates/uv/src/polkit.rs b/crates/uv/src/polkit.rs
+new file mode 100644
+index 0000000..2f42089
+--- /dev/null
++++ b/crates/uv/src/polkit.rs
+@@ -0,0 +1,178 @@
++//! Desktop polkit authentication prompt.
++//!
++//! When the installed polkit policy and PAM stack support it, the broker asks polkit to
++//! authenticate the calling user instead of driving fprintd directly. polkit forwards the
++//! request to the desktop polkit agent, and `/etc/pam.d/polkit-1` supplies the actual
++//! verification (Omarchy's agent shows its fingerprint card when `pam_fprintd.so` is in
++//! that stack). This is the same mechanism Omarchy's own privileged actions use.
++//!
++//! The action must be owned by the broker's system user
++//! (`org.freedesktop.policykit.owner`), because polkit 127 only lets uid 0 or an action
++//! owner call `CheckAuthorization` for another identity. The subject is the caller's
++//! `system-bus-name`, so polkit can resolve the caller's session and prompt on its seat.
++//!
++//! No `_keep` default is used: every passkey operation must authenticate again.
++
++use std::collections::HashMap;
++use std::path::Path;
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::time::Duration;
++
++use tokio_util::sync::CancellationToken;
++use zbus::zvariant::Value;
++use zbus::Connection;
++
++/// The polkit action gating fingerprint user verification.
++pub const ACTION: &str = "io.github.dangerousplay.PasskeyTpm1.verify";
++/// The installed action file. `available` requires it, so an old install falls back to
++/// the direct fprintd path instead of asking polkit about an unknown action.
++pub const ACTION_FILE: &str =
++    "/usr/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy";
++/// The PAM stack the desktop polkit agent authenticates through.
++pub const PAM_STACK: &str = "/etc/pam.d/polkit-1";
++
++const POLKIT_SERVICE: &str = "org.freedesktop.PolicyKit1";
++const POLKIT_PATH: &str = "/org/freedesktop/PolicyKit1/Authority";
++const POLKIT_INTERFACE: &str = "org.freedesktop.PolicyKit1.Authority";
++/// `AllowUserInteraction`: show the desktop agent's dialog.
++const ALLOW_USER_INTERACTION: u32 = 1;
++
++static NEXT_CANCELLATION_ID: AtomicU64 = AtomicU64::new(0);
++
++/// Outcome of asking polkit to authenticate the caller.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum Outcome {
++    /// polkit reports the caller is authorized.
++    Authorized,
++    /// The user dismissed the dialog or failed authentication.
++    Denied,
++    /// The broker cancelled the request (the browser gave up).
++    Cancelled,
++    /// No answer before the broker's verification deadline.
++    TimedOut,
++    /// polkit or the desktop agent could not be reached.
++    Unavailable(String),
++}
++
++/// Whether the desktop prompt can be used: the action is installed and the polkit PAM
++/// stack performs a fingerprint scan. Keeping `pam_fprintd` in the stack is what makes
++/// Omarchy's agent render the fingerprint card instead of the password field alone.
++#[must_use]
++pub fn available() -> bool {
++    Path::new(ACTION_FILE).is_file() && pam_uses_fprintd()
++}
++
++/// Whether `raw` (the contents of [`PAM_STACK`]) has `pam_fprintd.so` in an `auth` line.
++///
++/// Mirrors Omarchy's `fingerprintConfiguredFromPamConfig`: the module need not be first,
++/// and a clamshell gate may precede it.
++#[must_use]
++pub fn pam_config_uses_fprintd(raw: &str) -> bool {
++    raw.lines().any(|line| {
++        let line = line.trim();
++        !line.is_empty()
++            && !line.starts_with('#')
++            && line.starts_with("auth")
++            && line.contains("pam_fprintd.so")
++    })
++}
++
++fn pam_uses_fprintd() -> bool {
++    std::fs::read_to_string(PAM_STACK).is_ok_and(|raw| pam_config_uses_fprintd(&raw))
++}
++
++fn subject(sender: &str) -> (&'static str, HashMap<String, Value<'static>>) {
++    let mut details: HashMap<String, Value<'static>> = HashMap::new();
++    details.insert("name".to_owned(), Value::new(sender.to_owned()));
++    ("system-bus-name", details)
++}
++
++fn next_cancellation_id() -> String {
++    let seq = NEXT_CANCELLATION_ID.fetch_add(1, Ordering::Relaxed);
++    format!("passkey-tpm-{}-{seq}", std::process::id())
++}
++
++/// Asks polkit to authenticate `sender` (the caller's unique bus name) for [`ACTION`].
++///
++/// `timeout` bounds the whole dialog. `cancel` cancels a pending dialog as well; either
++/// path asks polkit to drop it so a later request does not inherit a stale prompt.
++pub async fn authorize(
++    connection: &Connection,
++    sender: &str,
++    timeout: Duration,
++    cancel: &CancellationToken,
++) -> Outcome {
++    let proxy =
++        match zbus::Proxy::new(connection, POLKIT_SERVICE, POLKIT_PATH, POLKIT_INTERFACE).await {
++            Ok(proxy) => proxy,
++            Err(e) => return Outcome::Unavailable(format!("polkit proxy: {e}")),
++        };
++
++    let cancellation_id = next_cancellation_id();
++    let details: HashMap<String, String> = HashMap::new();
++    let body = (
++        subject(sender),
++        ACTION,
++        details,
++        ALLOW_USER_INTERACTION,
++        cancellation_id.as_str(),
++    );
++    let call =
++        proxy.call::<_, _, (bool, bool, HashMap<String, String>)>("CheckAuthorization", &body);
++    tokio::pin!(call);
++
++    let result = tokio::select! {
++        biased;
++        () = cancel.cancelled() => {
++            cancel_pending(&proxy, &cancellation_id).await;
++            return Outcome::Cancelled;
++        }
++        () = tokio::time::sleep(timeout) => {
++            cancel_pending(&proxy, &cancellation_id).await;
++            return Outcome::TimedOut;
++        }
++        result = &mut call => result,
++    };
++
++    match result {
++        Ok((true, _, _)) => Outcome::Authorized,
++        Ok((false, _, _)) => Outcome::Denied,
++        Err(e) => Outcome::Unavailable(format!("polkit CheckAuthorization: {e}")),
++    }
++}
++
++/// Best-effort cancellation: the dialog may already be gone, and the broker must not
++/// block on the cleanup call.
++async fn cancel_pending(proxy: &zbus::Proxy<'_>, cancellation_id: &str) {
++    let _: Result<(), _> = proxy
++        .call("CancelCheckAuthorization", &(cancellation_id,))
++        .await;
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn fprintd_is_detected_anywhere_in_the_auth_stack() {
++        assert!(pam_config_uses_fprintd(
++            "auth [success=1 default=ignore] pam_exec.so quiet /usr/bin/clamshell\nauth sufficient pam_fprintd.so\nauth required pam_unix.so\n"
++        ));
++        assert!(!pam_config_uses_fprintd("auth required pam_unix.so\n"));
++        // A commented module must not count.
++        assert!(!pam_config_uses_fprintd(
++            "#auth sufficient pam_fprintd.so\n"
++        ));
++        // Only the auth stack counts, not account/session.
++        assert!(!pam_config_uses_fprintd(
++            "account sufficient pam_fprintd.so\n"
++        ));
++    }
++
++    #[test]
++    fn subject_is_the_callers_system_bus_name() {
++        let (kind, details) = subject(":1.42");
++        assert_eq!(kind, "system-bus-name");
++        assert_eq!(details.get("name"), Some(&Value::new(":1.42".to_owned())));
++    }
++}
+diff --git a/crates/uvd/src/lib.rs b/crates/uvd/src/lib.rs
+index ba0c28f..59434b1 100644
+--- a/crates/uvd/src/lib.rs
++++ b/crates/uvd/src/lib.rs
+@@ -2,10 +2,12 @@
+ //!
+ //! Callers reach it over the system bus. The calling user is taken from the bus
+ //! (`GetConnectionUnixUser`), never from request data, and every operation is confined to
+-//! that user's credentials. Fingerprint verification runs here, against fprintd, for that
+-//! user only; a [`UvEvidence`] is created only from fprintd's `verify-match`. Requests are
+-//! served only while the calling user has an active session on a local seat
+-//! ([`passkey_tpm_uv::seat`]).
++//! that user's credentials. User verification runs here for that user only. When the
++//! installed polkit action and PAM stack support it, the broker asks polkit to
++//! authenticate the calling agent, which shows the desktop (Omarchy) fingerprint prompt;
++//! otherwise it drives fprintd directly. Either way a [`UvEvidence`] is created only from
++//! a successful check. Requests are served only while the calling user has an active
++//! session on a local seat ([`passkey_tpm_uv::seat`]).
+ //!
+ //! Users without an enrolled fingerprint confirm presence instead (AD-022): the broker
+ //! sends a `PresenceRequested(id, prompt)` signal to the connection that made the `Ctap`
+@@ -21,6 +23,7 @@ use passkey_tpm_core::ctaphid::MAX_MSG;
+ use passkey_tpm_core::evidence::UvEvidence;
+ use passkey_tpm_core::tpm_iface::{TpmOps, Uid};
+ use passkey_tpm_uv::fprintd::{self, UvResult};
++use passkey_tpm_uv::polkit;
+ use tokio::sync::oneshot;
+ use tokio_util::sync::CancellationToken;
+ use zbus::message::Header;
+@@ -168,6 +171,27 @@ impl UserLookup for NssUsers {
+     }
+ }
+ 
++/// How the broker asks the user for user verification.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum PromptBackend {
++    /// polkit forwards the request to the desktop agent (Omarchy's fingerprint card).
++    Polkit,
++    /// The broker claims fprintd itself and the agent shows a notification.
++    Fprintd,
++}
++
++impl PromptBackend {
++    /// Picks the desktop prompt when the installed action and PAM stack support it.
++    #[must_use]
++    pub fn detect() -> Self {
++        if polkit::available() {
++            Self::Polkit
++        } else {
++            Self::Fprintd
++        }
++    }
++}
++
+ /// A presence confirmation the broker is waiting for.
+ struct PresenceWait {
+     /// Unique bus name of the `Ctap` caller; only it may answer.
+@@ -178,10 +202,12 @@ struct PresenceWait {
+ /// The D-Bus service object.
+ pub struct Broker {
+     worker: TpmWorker,
+-    fprintd: Connection,
++    /// System bus connection, shared by fprintd and polkit.
++    bus: Connection,
+     users: Box<dyn UserLookup>,
+     sessions: Box<dyn SessionPolicy>,
+     verify_timeout: Duration,
++    prompt: PromptBackend,
+     cancels: Arc<Mutex<HashMap<u32, (u64, CancellationToken)>>>,
+     presence: Mutex<HashMap<u64, PresenceWait>>,
+     next_request: std::sync::atomic::AtomicU64,
+@@ -196,22 +222,24 @@ impl std::fmt::Debug for Broker {
+ }
+ 
+ impl Broker {
+-    /// `fprintd` is the (system) bus connection used to reach fprintd; `sessions` decides
+-    /// which users are at a seat (production: [`Logind`]).
++    /// `bus` is the (system) bus connection used to reach fprintd and polkit; `sessions`
++    /// decides which users are at a seat (production: [`Logind`]).
+     #[must_use]
+     pub fn new(
+         worker: TpmWorker,
+-        fprintd: Connection,
++        bus: Connection,
+         users: Box<dyn UserLookup>,
+         sessions: Box<dyn SessionPolicy>,
+         verify_timeout: Duration,
++        prompt: PromptBackend,
+     ) -> Self {
+         Self {
+             worker,
+-            fprintd,
++            bus,
+             users,
+             sessions,
+             verify_timeout,
++            prompt,
+             cancels: Arc::default(),
+             presence: Mutex::default(),
+             next_request: std::sync::atomic::AtomicU64::new(0),
+@@ -262,7 +290,7 @@ impl Broker {
+             if remaining.is_zero() {
+                 return UvResult::TimedOut;
+             }
+-            let result = fprintd::verify(&self.fprintd, username, remaining, cancel.clone()).await;
++            let result = fprintd::verify(&self.bus, username, remaining, cancel.clone()).await;
+             if result != UvResult::NoMatch || attempt == MAX_UV_ATTEMPTS {
+                 return result;
+             }
+@@ -304,7 +332,7 @@ impl Broker {
+         }
+         let username = self.users.username(uid);
+         let uv_enrolled = match &username {
+-            Some(name) => match fprintd::has_enrolled(&self.fprintd, name).await {
++            Some(name) => match fprintd::has_enrolled(&self.bus, name).await {
+                 Ok(enrolled) => enrolled,
+                 // fprintd can't be started or reached (no reader, not installed): logged so
+                 // it isn't mistaken for "no fingerprints", but advertised as no built-in UV
+@@ -339,10 +367,50 @@ impl Broker {
+             // Cancelled before the prompt: don't claim the reader at all.
+             _ if cancel.is_cancelled() => UvOutcome::Cancelled,
+             None => UvOutcome::Unavailable,
+-            Some(name) => {
+-                let result = self.verify_with_retries(&name, &cancel).await;
++            Some(name) => self.verify(&name, uid, caller, &cancel).await,
++        };
++        self.worker
++            .complete(pending, outcome)
++            .await
++            .unwrap_or_else(|| vec![STATUS_OTHER])
++    }
++
++    /// Runs user verification for `uid`, using the configured prompt backend.
++    ///
++    /// polkit is fail-closed: once [`PromptBackend::Polkit`] is selected, a polkit or
++    /// desktop-agent failure is reported as unavailable instead of silently claiming
++    /// fprintd itself (which would bypass the visible prompt and could prompt twice).
++    async fn verify(
++        &self,
++        username: &str,
++        uid: u32,
++        caller: &Caller<'_>,
++        cancel: &CancellationToken,
++    ) -> UvOutcome {
++        match self.prompt {
++            PromptBackend::Polkit => {
++                match polkit::authorize(&self.bus, caller.name, self.verify_timeout, cancel).await {
++                    polkit::Outcome::Authorized => {
++                        // The only evidence created from the desktop prompt: polkit
++                        // authorized this caller for this request (PAM verified them).
++                        UvOutcome::Matched(UvEvidence::from_polkit_authorization(uid))
++                    }
++                    polkit::Outcome::Denied => UvOutcome::NoMatch,
++                    polkit::Outcome::Cancelled => UvOutcome::Cancelled,
++                    polkit::Outcome::TimedOut => UvOutcome::TimedOut,
++                    polkit::Outcome::Unavailable(e) => {
++                        #[allow(clippy::print_stderr)]
++                        {
++                            eprintln!("polkit prompt unavailable for uid={uid}: {e}");
++                        }
++                        UvOutcome::Unavailable
++                    }
++                }
++            }
++            PromptBackend::Fprintd => {
++                let result = self.verify_with_retries(username, cancel).await;
+                 match result {
+-                    // The only place evidence is created: a real fprintd match for this uid.
++                    // The only evidence created on this backend: a real fprintd match.
+                     UvResult::Match => UvOutcome::Matched(UvEvidence::from_fprintd_match(uid)),
+                     UvResult::NoMatch => UvOutcome::NoMatch,
+                     UvResult::Cancelled => UvOutcome::Cancelled,
+@@ -350,11 +418,7 @@ impl Broker {
+                     UvResult::Unavailable(_) => UvOutcome::Unavailable,
+                 }
+             }
+-        };
+-        self.worker
+-            .complete(pending, outcome)
+-            .await
+-            .unwrap_or_else(|| vec![STATUS_OTHER])
++        }
+     }
+ 
+     /// Asks the `Ctap` caller to confirm presence for `prompt` and waits for its answer,
+diff --git a/crates/uvd/src/main.rs b/crates/uvd/src/main.rs
+index 5579bfc..803d98a 100644
+--- a/crates/uvd/src/main.rs
++++ b/crates/uvd/src/main.rs
+@@ -7,7 +7,7 @@ use std::str::FromStr;
+ use std::time::Duration;
+ 
+ use passkey_tpm_tpm::adapter::TpmBackend;
+-use passkey_tpm_uvd::{serve, Broker, Logind, NssUsers, TpmWorker};
++use passkey_tpm_uvd::{serve, Broker, Logind, NssUsers, PromptBackend, TpmWorker};
+ use tss_esapi::tcti_ldr::TctiNameConf;
+ use tss_esapi::Context;
+ 
+@@ -67,12 +67,15 @@ async fn main() -> ExitCode {
+         }
+     };
+     let watchdog = worker.clone();
++    let prompt = PromptBackend::detect();
++    eprintln!("user-verification prompt: {prompt:?}");
+     let broker = Broker::new(
+         worker,
+         conn.clone(),
+         Box::new(NssUsers),
+         Box::new(Logind::new(conn.clone())),
+         verify_timeout(),
++        prompt,
+     );
+     if let Err(e) = serve(&conn, broker).await {
+         eprintln!("cannot export the broker: {e}");
+diff --git a/crates/uvd/tests/broker.rs b/crates/uvd/tests/broker.rs
+index 7a5e729..065687b 100644
+--- a/crates/uvd/tests/broker.rs
++++ b/crates/uvd/tests/broker.rs
+@@ -106,6 +106,8 @@ async fn fixture_with(mock_fprintd: MockFprintd, sessions: Box<dyn SessionPolicy
+         Box::new(AlwaysAlice),
+         sessions,
+         Duration::from_secs(5),
++        // The test bus has no polkit; keep the fprintd path deterministic.
++        passkey_tpm_uvd::PromptBackend::Fprintd,
+     );
+     serve(&broker_conn, broker).await.expect("serve broker");
+     let client = bus.connect().await;
+diff --git a/packaging/polkit/io.github.dangerousplay.PasskeyTpm1.policy b/packaging/polkit/io.github.dangerousplay.PasskeyTpm1.policy
+new file mode 100644
+index 0000000..3d2b49b
+--- /dev/null
++++ b/packaging/polkit/io.github.dangerousplay.PasskeyTpm1.policy
+@@ -0,0 +1,26 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE policyconfig PUBLIC
++ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
++ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
++<policyconfig>
++  <vendor>passkey-tpm</vendor>
++  <!-- The broker asks polkit to authenticate the caller for each WebAuthn operation.
++       A desktop polkit agent (Omarchy's omarchy.polkit plugin) shows the prompt, and
++       /etc/pam.d/polkit-1 performs the check. When that stack contains pam_fprintd.so,
++       Omarchy renders its fingerprint card. This is the same mechanism its own
++       privileged actions use. -->
++  <action id="io.github.dangerousplay.PasskeyTpm1.verify">
++    <description>Use a passkey protected by passkey-tpm</description>
++    <message>Authentication is required to use your passkey</message>
++    <defaults>
++      <allow_any>auth_admin</allow_any>
++      <allow_inactive>auth_admin</allow_inactive>
++      <!-- No _keep default: every operation must authenticate again. -->
++      <allow_active>auth_self</allow_active>
++    </defaults>
++    <!-- The broker runs as the unprivileged `passkey-tpm` user, not root. polkit 127
++         only lets trusted callers (uid 0 or an action owner) call CheckAuthorization()
++         for another identity, so the broker must own the action to check its caller. -->
++    <annotate key="org.freedesktop.policykit.owner">unix-user:passkey-tpm</annotate>
++  </action>
++</policyconfig>
+diff --git a/xtask/src/tasks/dist.rs b/xtask/src/tasks/dist.rs
+index 7e478f6..d060210 100644
+--- a/xtask/src/tasks/dist.rs
++++ b/xtask/src/tasks/dist.rs
+@@ -66,6 +66,11 @@ pub const INSTALL: &[(&str, &str, u32)] = &[
+         "{prefix}/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules",
+         0o644,
+     ),
++    (
++        "packaging/polkit/io.github.dangerousplay.PasskeyTpm1.policy",
++        "{prefix}/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy",
++        0o644,
++    ),
+     (
+         "packaging/udev/70-passkey-tpm-uhid.rules",
+         "{prefix}/lib/udev/rules.d/70-passkey-tpm-uhid.rules",

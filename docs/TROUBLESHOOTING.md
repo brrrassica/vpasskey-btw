@@ -38,6 +38,36 @@ sudo passkey-tpm info   # add TPM vendor details
 3. Is the browser native (not Snap/Flatpak)? Sandboxed browsers generally
    cannot open the device.
 
+## No fingerprint card appears (only a notification, or nothing)
+
+Check which prompt the broker will use:
+
+```sh
+./verify.sh --prompt
+sudo journalctl -u passkey-tpm-uvd -b | grep 'user-verification prompt'
+```
+
+`polkit` means the broker asks the desktop agent for each operation. It needs
+both pieces installed:
+
+- `/usr/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy`
+- `pam_fprintd.so` in an `auth` line of `/etc/pam.d/polkit-1`
+
+On Omarchy, `omarchy-setup-security-fingerprint` writes that PAM line. If it is
+missing, the broker falls back to `fprintd` and the session agent shows a
+notification. Reinstall this project after changing either file so the action
+file is present, then restart the broker:
+
+```sh
+sudo systemctl restart passkey-tpm-uvd
+systemctl --user restart passkey-tpm-agent
+```
+
+If the desktop dialog appears but has only a password field, the PAM stack is
+not using `pam_fprintd`; re-run Omarchy's fingerprint setup. A dismissed dialog
+shows up as a failed WebAuthn operation, and `Cancel` from the browser closes
+the dialog.
+
 ## The fingerprint is never accepted
 
 - **Hold the finger still for about a second.** A quick tap is the usual failure.
