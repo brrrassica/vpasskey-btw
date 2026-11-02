@@ -81,6 +81,27 @@ its SHA integrity check. When you add a patch, add its marker check to the
    finds and returns the resident user metadata.
  - Marker: the empty-`allowList` comment in
    `crates/core/src/ctap2/get_assertion.rs`.
+- `0006-0.2.0-hmac-secret-coverage.patch`
+ - M3.5: pins the `hmac-secret` extension end to end. The advertisement stays
+   `credProtect` + `hmac-secret`, and the test now asserts `prf` is not advertised
+   because there is no WebAuthn PRF wiring.
+ - M3.5: `makeCredential` with `hmac-secret: false` or no extension returns no
+   extension output and creates no hmac keys; a non-boolean value is
+   `CTAP2_ERR_CBOR_UNEXPECTED_TYPE`.
+ - M3.5: malformed `getAssertion` inputs map to specific statuses: missing
+   key/saltEnc/saltAuth is `CTAP2_ERR_MISSING_PARAMETER`, a malformed platform
+   key or unsupported PIN/UV auth protocol is `CTAP2_ERR_INVALID_PARAMETER`, a
+   decrypted salt that is neither 32 nor 64 bytes is `CTAP2_ERR_INVALID_LENGTH`,
+   and a bad `saltAuth` remains `CTAP2_ERR_PIN_AUTH_INVALID`.
+ - M3.5: a single salt produces exactly one deterministic 32-byte output; the
+   raw output never appears in the response, only its AES-CBC ciphertext. An
+   omitted `pinUvAuthProtocol` defaults to protocol one, and a 64-byte input
+   returns `output1 ‖ output2`.
+ - M3.5: on a multi-account discoverable assertion, `hmac-secret` is computed
+   only for the first assertion; `getNextAssertion` reuses UV but carries no
+   extension output.
+ - Marker: the `hmac_secret_applies_only_to_the_first_assertion` test name in
+   `crates/core/src/ctap2/tests.rs`.
 
 ## Refreshing a patch
 

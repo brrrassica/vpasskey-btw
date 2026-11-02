@@ -211,6 +211,10 @@ patch_marker() {
 			grep -q 'empty allowList means' \
 				"$SRC/crates/core/src/ctap2/get_assertion.rs"
 			;;
+		0006-*)
+			grep -q 'hmac_secret_applies_only_to_the_first_assertion' \
+				"$SRC/crates/core/src/ctap2/tests.rs"
+			;;
 		*)
 			return 1
 			;;
