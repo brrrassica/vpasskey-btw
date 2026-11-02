@@ -5,18 +5,207 @@
 # Run as your normal user; privileged steps use sudo.
 set -euo pipefail
 
-REPO_URL="https://github.com/dangerousplay/passkey-tpm"
-TAG="${PASSKEY_TPM_TAG:-v0.1.0-beta.1}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$ROOT/passkey-tpm"
+PATCH_DIR="$ROOT/patches"
 LIBEXECDIR="/usr/lib"   # Arch policy (rather than /usr/libexec)
+VERSIONS_FILE="$ROOT/versions.env"
+
+DRY_RUN=0
+FORCE=0
+SHOW_VERSION=0
+
+usage() {
+	cat <<'EOF'
+usage: install.sh [--dry-run] [--force] [--version] [--help]
+
+  --dry-run   Print what would be done; touch nothing and run no sudo/build.
+  --force     Reinstall even if the installed version already matches the pin.
+              A dirty passkey-tpm/ checkout is still fatal.
+  --version   Print the wrapper version and the upstream pin, then exit.
+  --help      Show this help.
+EOF
+}
 
 log() { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
+die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
-if [[ ! -d "$SRC/.git" ]]; then
-	log "Cloning passkey-tpm @ $TAG"
-	git clone --depth 1 --branch "$TAG" "$REPO_URL" "$SRC"
+while (( $# > 0 )); do
+	case "$1" in
+		--dry-run) DRY_RUN=1 ;;
+		--force) FORCE=1 ;;
+		--version|-V) SHOW_VERSION=1 ;;
+		--help|-h) usage; exit 0 ;;
+		*) die "unknown option: $1 (see --help)" ;;
+	esac
+	shift
+done
+
+# Remember whether the caller overrode the pin, so a custom REF without a
+# custom COMMIT does not get checked against versions.env's commit.
+CUSTOM_REF=0
+CUSTOM_COMMIT=0
+[[ -n "${PASSKEY_TPM_REF:-}" ]] && CUSTOM_REF=1
+[[ -n "${PASSKEY_TPM_COMMIT:-}" ]] && CUSTOM_COMMIT=1
+
+[[ -f "$VERSIONS_FILE" ]] || die "missing $VERSIONS_FILE"
+# shellcheck source=versions.env disable=SC1091
+source "$VERSIONS_FILE"
+
+REPO_URL="${PASSKEY_TPM_REPO:-}"
+REF="${PASSKEY_TPM_REF:-}"
+COMMIT="${PASSKEY_TPM_COMMIT:-}"
+WRAPPER_VERSION="${VPASSKEY_VERSION:-unknown}"
+[[ -n "$REPO_URL" ]] || die "PASSKEY_TPM_REPO is not set"
+[[ -n "$REF" ]] || die "PASSKEY_TPM_REF is not set"
+if (( CUSTOM_REF && ! CUSTOM_COMMIT )); then
+	log "Custom PASSKEY_TPM_REF=$REF; commit verification disabled"
+	COMMIT=""
 fi
+
+if (( SHOW_VERSION )); then
+	printf 'vpasskey-btw %s\n' "$WRAPPER_VERSION"
+	printf 'upstream: %s\n' "$REF"
+	printf 'commit:   %s\n' "${COMMIT:-<not verified>}"
+	exit 0
+fi
+
+# REF is normally a tag like v0.1.0-beta.2; strip the leading v for comparing
+# with `passkey-tpm version`.
+TARGET_VERSION="${REF#v}"
+
+# Skip a pointless rebuild unless the user asks to reinstall. The installed
+# version is the authoritative check: the wrapper pin is a tag, not a commit.
+# --dry-run always prints the plan, even when the installed version matches.
+if (( ! FORCE && ! DRY_RUN )) && command -v passkey-tpm >/dev/null 2>&1; then
+	installed_version="$(passkey-tpm version 2>/dev/null | awk '{print $1}' || true)"
+	if [[ "$installed_version" == "$TARGET_VERSION" ]]; then
+		log "passkey-tpm $installed_version is already installed; use --force to reinstall"
+		exit 0
+	fi
+fi
+
+# Files installed from the staging tree. Keep this list in sync with
+# cargo xtask dist and the uninstaller.
+BIN_FILES=(
+	/usr/bin/passkey-tpm
+	/usr/lib/passkey-tpm/passkey-tpm-agent
+	/usr/lib/passkey-tpm/passkey-tpm-uvd
+)
+CONF_FILES=(
+	/usr/lib/systemd/system/passkey-tpm-uvd.service
+	/usr/lib/systemd/user/passkey-tpm-agent.service
+	/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf
+	/usr/share/dbus-1/system-services/io.github.dangerousplay.PasskeyTpm1.service
+	/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules
+	/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules
+	/usr/lib/sysusers.d/passkey-tpm.conf
+	/usr/lib/modules-load.d/passkey-tpm.conf
+)
+TREE_PATHS=(
+	/usr/lib/passkey-tpm
+	/usr/share/doc/passkey-tpm
+	/usr/share/licenses/passkey-tpm
+)
+
+patch_files() {
+	[[ -d "$PATCH_DIR" ]] || return 0
+	local patches=("$PATCH_DIR"/*.patch)
+	[[ -e "${patches[0]}" ]] || return 0
+	printf '%s\n' "${patches[@]}"
+}
+
+if (( DRY_RUN )); then
+	cat <<EOF
+
+==> Dry run: no changes will be made
+
+wrapper:          vpasskey-btw $WRAPPER_VERSION
+upstream repo:    $REPO_URL
+upstream ref:     $REF
+expected commit:  ${COMMIT:-<not verified>}
+source checkout:  $SRC
+libexecdir:       $LIBEXECDIR
+
+Would sync the source checkout (clone/fetch/checkout as needed).
+EOF
+	while IFS= read -r patch; do
+		[[ -n "$patch" ]] && printf 'Would apply patch: %s\n' "$patch"
+	done < <(patch_files)
+	cat <<EOF
+Would build release binaries and stage a dist tree.
+Would install (root-owned, 0755 binaries / 0644 config):
+$(printf '  %s\n' "${BIN_FILES[@]}" "${CONF_FILES[@]}")
+Would strip ACLs/xattrs and verify no named ACL entries remain.
+Would run systemd-sysusers, modprobe uhid, udev/dbus/systemd reloads.
+Would enable and start passkey-tpm-agent for this user.
+EOF
+	exit 0
+fi
+
+# Fetch the pinned ref and check out its exact commit. Works for a fresh
+# clone, an existing checkout on another branch, and a stale checkout left
+# behind by an older install.sh.
+sync_source() {
+	if [[ ! -d "$SRC/.git" ]]; then
+		log "Cloning $REPO_URL"
+		mkdir -p "$(dirname "$SRC")"
+		git clone --no-checkout --filter=blob:none "$REPO_URL" "$SRC"
+	else
+		local origin_url
+		origin_url="$(git -C "$SRC" remote get-url origin 2>/dev/null || true)"
+		if [[ "$origin_url" != "$REPO_URL" ]]; then
+			die "existing checkout $SRC tracks '${origin_url:-<none>}', expected '$REPO_URL'. Remove it or set PASSKEY_TPM_REPO."
+		fi
+		if ! git -C "$SRC" diff --quiet || ! git -C "$SRC" diff --cached --quiet; then
+			die "$SRC has local changes; commit or stash them before installing."
+		fi
+	fi
+
+	log "Fetching $REF from origin"
+	git -C "$SRC" fetch --depth 1 --force origin "$REF"
+
+	local resolved
+	resolved="$(git -C "$SRC" rev-parse --verify 'FETCH_HEAD^{commit}')"
+	if [[ -n "$COMMIT" && "$resolved" != "$COMMIT" ]]; then
+		die "$REF resolved to $resolved, expected $COMMIT"
+	fi
+
+	log "Checking out ${COMMIT:-$resolved}"
+	git -C "$SRC" -c advice.detachedHead=false checkout --detach "$resolved"
+	local head
+	head="$(git -C "$SRC" rev-parse HEAD)"
+	[[ "$head" == "$resolved" ]] || die "checkout produced $head, expected $resolved"
+	if [[ -n "$COMMIT" ]]; then
+		log "Verified source integrity: $COMMIT"
+	fi
+}
+
+# Apply the tracked local patch series on top of the pristine upstream
+# checkout, then commit it so the next run's dirty-checkout guard still sees a
+# clean tree. The files under patches/ remain the source of truth.
+apply_patches() {
+	local patch
+	while IFS= read -r patch; do
+		[[ -n "$patch" ]] || continue
+		log "Applying $(basename "$patch")"
+		if ! git -C "$SRC" apply --check "$patch"; then
+			die "$(basename "$patch") does not apply to ${COMMIT:-$REF}; refresh the patch series"
+		fi
+		git -C "$SRC" apply "$patch"
+	done < <(patch_files)
+
+	if ! git -C "$SRC" diff --quiet || ! git -C "$SRC" diff --cached --quiet; then
+		git -C "$SRC" add -A
+		git -C "$SRC" -c user.name="vpasskey-btw" \
+			-c user.email="vpasskey-btw@localhost" \
+			commit -q -m "vpasskey-btw: apply local patch series"
+		log "Committed the local patch series (working tree left clean)"
+	fi
+}
+
+sync_source
+apply_patches
 
 log "Building release binaries"
 ( cd "$SRC" && cargo build --release )
@@ -31,25 +220,29 @@ systemctl --user stop passkey-tpm-agent 2>/dev/null || true
 sudo systemctl stop passkey-tpm-uvd 2>/dev/null || true
 
 log "Installing files into / (sudo)"
-sudo cp -a "$STAGE/usr/." /usr/
-sudo chown root:root \
-	/usr/bin/passkey-tpm \
-	/usr/lib/passkey-tpm/passkey-tpm-agent \
-	/usr/lib/passkey-tpm/passkey-tpm-uvd \
-	/usr/lib/systemd/system/passkey-tpm-uvd.service \
-	/usr/lib/systemd/user/passkey-tpm-agent.service \
-	/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf \
-	/usr/share/dbus-1/system-services/io.github.dangerousplay.PasskeyTpm1.service \
-	/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules \
-	/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules \
-	/usr/lib/sysusers.d/passkey-tpm.conf \
-	/usr/lib/modules-load.d/passkey-tpm.conf
-# cp -a preserves the staging tree's ownership, so the directories created
-# above are owned by the invoking user until chowned here.
-sudo chown -R root:root \
-	/usr/lib/passkey-tpm \
-	/usr/share/doc/passkey-tpm \
-	/usr/share/licenses/passkey-tpm
+# Do NOT use `cp -a`/`-p` here: the staging tree is owned by the invoking user,
+# and preserving ACLs or xattrs would leave them writable by that user even
+# after chown (issue #3). --remove-destination also avoids inheriting ACLs
+# from a pre-existing installed file.
+sudo cp -r --no-preserve=all --remove-destination "$STAGE/usr/." /usr/
+sudo chown root:root "${BIN_FILES[@]}" "${CONF_FILES[@]}"
+sudo chown -R root:root "${TREE_PATHS[@]}"
+sudo chmod 0755 "${BIN_FILES[@]}"
+sudo chmod 0644 "${CONF_FILES[@]}"
+sudo chmod 0755 "${TREE_PATHS[@]}"
+
+# Belt and braces: cp is not supposed to copy ACLs now, but strip any that are
+# present and fail the install if a named entry survived.
+if command -v setfacl >/dev/null 2>&1; then
+	sudo setfacl -bR "${BIN_FILES[@]}" "${CONF_FILES[@]}" "${TREE_PATHS[@]}"
+fi
+if command -v getfacl >/dev/null 2>&1; then
+	if sudo getfacl -pR "${BIN_FILES[@]}" "${CONF_FILES[@]}" "${TREE_PATHS[@]}" 2>/dev/null \
+		| grep -Eq '^user:[^:]+:'; then
+		die "installed files still carry a named ACL entry; refusing to continue"
+	fi
+	log "Verified: installed files have no named ACL entries"
+fi
 
 log "Creating broker user (passkey-tpm, member of tss)"
 sudo systemd-sysusers /usr/lib/sysusers.d/passkey-tpm.conf

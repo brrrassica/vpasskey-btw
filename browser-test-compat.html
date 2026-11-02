@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>passkey-tpm compatibility matrix</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
+  h1 { margin-bottom: .25rem; }
+  .sub { margin-top: 0; opacity: .75; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #8884; padding: .45rem .55rem; text-align: left; vertical-align: top; }
+  th { background: #8881; }
+  td:first-child { white-space: nowrap; }
+  button { font: inherit; padding: .35rem .7rem; cursor: pointer; }
+  button:disabled { cursor: progress; opacity: .55; }
+  #log { background: #111; color: #d7d7d7; padding: 1rem; white-space: pre-wrap; border-radius: 6px; min-height: 12rem; font-family: ui-monospace, monospace; font-size: .86rem; }
+  .ok { color: #6c6; } .bad { color: #f66; } .warn { color: #fc6; } .info { color: #8cf; } .section { color: #fff; font-weight: 700; margin-top: .6rem; }
+  .controls { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: 1rem 0; }
+  .note { background: #8881; border-left: 3px solid #8888; padding: .6rem .8rem; margin: 1rem 0; }
+  code { font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<h1>passkey-tpm &mdash; compatibility matrix</h1>
+<p class="sub">Local WebAuthn matrix for the target-site failure modes in <code>plans/towards-0.2.0.md</code> (M2).</p>
+
+<div class="note">
+  Serve this file over <strong>localhost</strong>, not an IP address:
+  <pre><code>python3 -m http.server 8765 --directory .
+google-chrome-stable http://localhost:8765/browser-test-compat.html</code></pre>
+  Chrome treats <code>http://localhost</code> as a secure context; <code>127.0.0.1</code> may not work.
+  Keep this tab focused. A scenario is running while its button is disabled.
+  The page never transmits anything; everything stays in the browser.
+</div>
+
+<div class="controls">
+  <label>Saved credential:
+    <select id="credential"></select>
+  </label>
+  <button id="clear">Clear log</button>
+  <button id="copy">Copy report</button>
+</div>
+
+<table>
+  <thead><tr><th>Scenario</th><th>What it exercises</th></tr></thead>
+  <tbody>
+    <tr><td><button data-run="probe">Probe capabilities</button></td>
+        <td>Platform-authenticator probe, conditional mediation, and WebAuthn API surface.</td></tr>
+    <tr><td><button data-run="register-baseline">Register baseline</button></td>
+        <td>No <code>authenticatorAttachment</code>, <code>residentKey: "required"</code>, <code>userVerification: "required"</code>. This is the credential most other scenarios reuse.</td></tr>
+    <tr><td><button data-run="register-platform">Register: platform attachment</button></td>
+        <td><code>authenticatorAttachment: "platform"</code>. Expected to fail on Linux; the failure text is the evidence.</td></tr>
+    <tr><td><button data-run="register-cross-platform">Register: cross-platform attachment</button></td>
+        <td><code>authenticatorAttachment: "cross-platform"</code>. This is the path the virtual USB key should satisfy.</td></tr>
+    <tr><td><button data-run="register-rk-preferred">Register: residentKey preferred</button></td>
+        <td><code>residentKey: "preferred"</code> (and <code>requireResidentKey: false</code>).</td></tr>
+    <tr><td><button data-run="register-rk-discouraged">Register: residentKey discouraged</button></td>
+        <td><code>residentKey: "discouraged"</code> (and <code>requireResidentKey: false</code>).</td></tr>
+    <tr><td><button data-run="register-uv-preferred">Register: UV preferred</button></td>
+        <td><code>userVerification: "preferred"</code>.</td></tr>
+    <tr><td><button data-run="register-uv-discouraged">Register: UV discouraged</button></td>
+        <td><code>userVerification: "discouraged"</code>. The authenticator still enforces UV.</td></tr>
+    <tr><td><button data-run="auth-populated">Authenticate: populated allowCredentials</button></td>
+        <td>Get assertion with an explicit credential descriptor list.</td></tr>
+    <tr><td><button data-run="auth-discoverable">Authenticate: empty allowCredentials</button></td>
+        <td>Discoverable assertion (<code>allowCredentials</code> omitted) against a resident credential.</td></tr>
+    <tr><td><button data-run="credprotect-1">credProtect level 1</button></td>
+        <td>Create with <code>credentialProtectionPolicy: "userVerificationOptional"</code> and <code>enforceCredentialProtectionPolicy: true</code>.</td></tr>
+    <tr><td><button data-run="credprotect-2">credProtect level 2</button></td>
+        <td>Create with <code>credentialProtectionPolicy: "userVerificationOptionalWithCredentialIDList"</code> and enforcement.</td></tr>
+    <tr><td><button data-run="credprotect-3">credProtect level 3</button></td>
+        <td>Create with <code>credentialProtectionPolicy: "userVerificationRequired"</code> and enforcement.</td></tr>
+    <tr><td><button data-run="credprotect-enforce">credProtect 3 + UV discouraged assertion</button></td>
+        <td>Create at level 3, then assert with <code>userVerification: "discouraged"</code>. Level 3 must still require UV.</td></tr>
+    <tr><td><button data-run="exclude">excludeCredentials matching</button></td>
+        <td>Attempt a second create whose <code>excludeCredentials</code> contains a stored credential ID. Expect <code>InvalidStateError</code>/<code>NotAllowedError</code>.</td></tr>
+    <tr><td><button data-run="cancel">Cancel in-flight request</button></td>
+        <td>Abort a pending assertion after 2&nbsp;s via <code>AbortController</code>. Do not touch the reader.</td></tr>
+    <tr><td><button data-run="concurrent">Two concurrent assertions</button></td>
+        <td>Launch two <code>navigator.credentials.get()</code> calls at once and log each result.</td></tr>
+    <tr><td><button data-run="retry">Retry after one failed scan</button></td>
+        <td>Start an assertion, <strong>lift your finger early on the first scan</strong>; the page retries once automatically and logs both outcomes.</td></tr>
+  </tbody>
+</table>
+
+<p class="note">
+  Browser note: Chrome does not expose the CTAP <code>credProtect</code> extension through the
+  WebAuthn API on every platform. If the browser strips <code>credentialProtectionPolicy</code>,
+  the result is still recorded, but enforcement must additionally be checked with
+  <code>fido2-cred</code>/<code>fido2-assert</code> and the broker trace.
+</p>
+
+<h2>Report</h2>
+<div id="log" aria-live="polite"></div>
+
+<script>
+(() => {
+  const logEl = document.getElementById('log');
+  const credSelect = document.getElementById('credential');
+  const buttons = [...document.querySelectorAll('button[data-run]')];
+  const rpId = location.hostname;
+  const rpName = 'passkey-tpm compatibility';
+  const b64url = /^[A-Za-z0-9_-]+$/;
+
+  /** @type {{id: string, user: Uint8Array, label: string, createdAt: number}[]} */
+  const saved = [];
+  let running = false;
+
+  const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
+
+  function toB64(buf) {
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function fromB64(text) {
+    if (!b64url.test(text)) throw new Error('not a base64url value');
+    const padded = text.replace(/-/g, '+').replace(/_/g, '/')
+      + '='.repeat((4 - (text.length % 4)) % 4);
+    const binary = atob(padded);
+    return Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  }
+
+  function stamp() {
+    return new Date().toISOString().slice(11, 23);
+  }
+
+  function log(message, kind = 'info') {
+    const range = document.createRange();
+    const frag = document.createDocumentFragment();
+    const prefix = document.createElement('span');
+    prefix.className = 'info';
+    prefix.textContent = `[${stamp()}] `;
+    const body = document.createElement('span');
+    body.className = kind;
+    body.textContent = message + '\n';
+    frag.append(prefix, body);
+    range.selectNodeContents(logEl);
+    range.collapse(false);
+    range.insertNode(frag);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function section(title) {
+    log(`\n=== ${title} ===`, 'section');
+  }
+
+  function errorText(error) {
+    if (error && error.name) {
+      return `${error.name}: ${error.message || '(no message)'}`;
+    }
+    return String(error);
+  }
+
+  function refreshCredentials() {
+    credSelect.textContent = '';
+    if (!saved.length) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = '(none yet — run Register baseline)';
+      credSelect.appendChild(option);
+      return;
+    }
+    saved.forEach((entry, index) => {
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = `${index}: ${entry.label} — ${entry.id.slice(0, 14)}…`;
+      credSelect.appendChild(option);
+    });
+    credSelect.value = String(saved.length - 1);
+  }
+
+  function selectedCredential() {
+    if (!saved.length) return null;
+    const index = credSelect.value === '' ? saved.length - 1 : Number(credSelect.value);
+    return saved[index] || null;
+  }
+
+  function descriptor(entry) {
+    return { type: 'public-key', id: fromB64(entry.id), transports: ['usb'] };
+  }
+
+  async function createCredential(options = {}) {
+    const user = options.user || rand(16);
+    const publicKey = {
+      challenge: rand(32),
+      rp: { id: rpId, name: rpName },
+      user: { id: user, name: `compat-${Date.now()}`, displayName: 'Compatibility test' },
+      pubKeyCredParams: [
+        { type: 'public-key', alg: -7 },
+        { type: 'public-key', alg: -257 }
+      ],
+      timeout: options.timeout || 60000,
+      attestation: 'none',
+      authenticatorSelection: {},
+      extensions: Object.assign({}, options.extensions || {})
+    };
+
+    if (options.attachment) publicKey.authenticatorSelection.authenticatorAttachment = options.attachment;
+    if (options.residentKey) publicKey.authenticatorSelection.residentKey = options.residentKey;
+    if (typeof options.requireResidentKey === 'boolean') {
+      publicKey.authenticatorSelection.requireResidentKey = options.requireResidentKey;
+    }
+    if (options.userVerification) publicKey.authenticatorSelection.userVerification = options.userVerification;
+    if (options.excludeCredentials && options.excludeCredentials.length) {
+      publicKey.excludeCredentials = options.excludeCredentials;
+    }
+
+    log(`create: ${JSON.stringify({
+      attachment: options.attachment || '(omitted)',
+      residentKey: options.residentKey || '(omitted)',
+      requireResidentKey: options.requireResidentKey ?? '(omitted)',
+      userVerification: options.userVerification || '(omitted)',
+      excludeCredentials: (options.excludeCredentials || []).length,
+      extensions: publicKey.extensions
+    })}`);
+
+    const credential = await navigator.credentials.create({ publicKey });
+    const id = toB64(credential.rawId);
+    const entry = {
+      id,
+      user: new Uint8Array(user),
+      label: options.label || 'credential',
+      createdAt: Date.now()
+    };
+    saved.push(entry);
+    refreshCredentials();
+
+    log(`create OK: id=${id.slice(0, 18)}… (${credential.rawId.byteLength} bytes)`, 'ok');
+    log(`attestation=${credential.response.attestationObject.byteLength} bytes; authenticatorAttachment=${credential.authenticatorAttachment || '(not reported)'}`);
+    log(`extensions=${JSON.stringify(credential.getClientExtensionResults())}`);
+    return { credential, entry };
+  }
+
+  async function assertCredential(options = {}) {
+    const publicKey = {
+      challenge: rand(32),
+      rpId,
+      timeout: options.timeout || 60000,
+      userVerification: options.userVerification || 'required'
+    };
+    if (options.allowCredentials) publicKey.allowCredentials = options.allowCredentials;
+    if (options.extensions) publicKey.extensions = options.extensions;
+
+    log(`get: ${JSON.stringify({
+      allowCredentials: options.allowCredentials ? options.allowCredentials.length : '(omitted)',
+      userVerification: publicKey.userVerification,
+      extensions: publicKey.extensions || {}
+    })}`);
+
+    const request = { publicKey };
+    if (options.signal) request.signal = options.signal;
+    return navigator.credentials.get(request);
+  }
+
+  function requireCredential() {
+    const entry = selectedCredential();
+    if (!entry) {
+      throw new Error('No saved credential in this page. Run "Register baseline" first.');
+    }
+    return entry;
+  }
+
+  async function ensureCredential() {
+    const entry = selectedCredential();
+    if (entry) return entry;
+    log('No saved credential; registering a baseline credential first.', 'warn');
+    const { entry: created } = await createCredential({
+      residentKey: 'required',
+      userVerification: 'required',
+      label: 'baseline'
+    });
+    return created;
+  }
+
+  const scenarios = {
+    async probe() {
+      const capabilities = {
+        webAuthn: !!window.PublicKeyCredential,
+        conditionalMediation: typeof PublicKeyCredential.isConditionalMediationAvailable === 'function',
+        platformAuthenticator: typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function',
+        getClientCapabilities: typeof PublicKeyCredential.getClientCapabilities === 'function',
+        userAgent: navigator.userAgent
+      };
+      log(`navigator.userAgent=${navigator.userAgent}`);
+      log(`capabilities=${JSON.stringify(capabilities)}`);
+
+      if (capabilities.platformAuthenticator) {
+        try {
+          const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+          log(`isUserVerifyingPlatformAuthenticatorAvailable=${available}`, available ? 'ok' : 'warn');
+        } catch (error) {
+          log(`platform probe failed: ${errorText(error)}`, 'bad');
+        }
+      }
+      if (capabilities.conditionalMediation) {
+        try {
+          const available = await PublicKeyCredential.isConditionalMediationAvailable();
+          log(`isConditionalMediationAvailable=${available}`, available ? 'ok' : 'warn');
+        } catch (error) {
+          log(`conditional mediation probe failed: ${errorText(error)}`, 'bad');
+        }
+      }
+      if (capabilities.getClientCapabilities) {
+        try {
+          const result = await PublicKeyCredential.getClientCapabilities();
+          log(`getClientCapabilities=${JSON.stringify(result)}`);
+        } catch (error) {
+          log(`getClientCapabilities failed: ${errorText(error)}`, 'bad');
+        }
+      }
+    },
+
+    async 'register-baseline'() {
+      await createCredential({
+        residentKey: 'required',
+        userVerification: 'required',
+        label: 'baseline',
+        extensions: { credProps: true }
+      });
+    },
+
+    async 'register-platform'() {
+      try {
+        await createCredential({
+          attachment: 'platform',
+          residentKey: 'required',
+          userVerification: 'required',
+          label: 'platform'
+        });
+        log('platform attachment unexpectedly succeeded on this system.', 'warn');
+      } catch (error) {
+        log(`EXPECTED platform-attachment failure: ${errorText(error)}`, 'ok');
+      }
+    },
+
+    async 'register-cross-platform'() {
+      await createCredential({
+        attachment: 'cross-platform',
+        residentKey: 'required',
+        userVerification: 'required',
+        label: 'cross-platform'
+      });
+    },
+
+    async 'register-rk-preferred'() {
+      await createCredential({
+        residentKey: 'preferred',
+        requireResidentKey: false,
+        userVerification: 'required',
+        label: 'rk-preferred'
+      });
+    },
+
+    async 'register-rk-discouraged'() {
+      await createCredential({
+        residentKey: 'discouraged',
+        requireResidentKey: false,
+        userVerification: 'required',
+        label: 'rk-discouraged'
+      });
+    },
+
+    async 'register-uv-preferred'() {
+      await createCredential({
+        residentKey: 'required',
+        userVerification: 'preferred',
+        label: 'uv-preferred'
+      });
+    },
+
+    async 'register-uv-discouraged'() {
+      await createCredential({
+        residentKey: 'required',
+        userVerification: 'discouraged',
+        label: 'uv-discouraged'
+      });
+    },
+
+    async 'auth-populated'() {
+      const entry = await ensureCredential();
+      const assertion = await assertCredential({
+        allowCredentials: [descriptor(entry)],
+        userVerification: 'required'
+      });
+      log(`get OK: signature=${assertion.response.signature.byteLength} bytes; ` +
+        `userVerified=${assertion.response.authenticatorData ? 'see authenticator data' : 'unknown'}`, 'ok');
+    },
+
+    async 'auth-discoverable'() {
+      await ensureCredential();
+      const assertion = await assertCredential({ userVerification: 'required' });
+      log(`discoverable get OK: signature=${assertion.response.signature.byteLength} bytes`, 'ok');
+      log(`discovered credential id=${toB64(assertion.rawId).slice(0, 18)}…`);
+    },
+
+    async 'credprotect-1'() {
+      const { entry } = await createCredential({
+        residentKey: 'required',
+        userVerification: 'required',
+        label: 'credProtect-1',
+        extensions: {
+          credentialProtectionPolicy: 'userVerificationOptional',
+          enforceCredentialProtectionPolicy: true
+        }
+      });
+      log(`credProtect level 1 applied to ${entry.id.slice(0, 14)}…`, 'warn');
+    },
+
+    async 'credprotect-2'() {
+      const { entry } = await createCredential({
+        residentKey: 'required',
+        userVerification: 'required',
+        label: 'credProtect-2',
+        extensions: {
+          credentialProtectionPolicy: 'userVerificationOptionalWithCredentialIDList',
+          enforceCredentialProtectionPolicy: true
+        }
+      });
+      log(`credProtect level 2 applied to ${entry.id.slice(0, 14)}…`, 'warn');
+    },
+
+    async 'credprotect-3'() {
+      const { entry } = await createCredential({
+        residentKey: 'required',
+        userVerification: 'required',
+        label: 'credProtect-3',
+        extensions: {
+          credentialProtectionPolicy: 'userVerificationRequired',
+          enforceCredentialProtectionPolicy: true
+        }
+      });
+      log(`credProtect level 3 applied to ${entry.id.slice(0, 14)}…`, 'warn');
+    },
+
+    async 'credprotect-enforce'() {
+      const { entry } = await createCredential({
+        residentKey: 'required',
+        userVerification: 'required',
+        label: 'credProtect-3-enforce',
+        extensions: {
+          credentialProtectionPolicy: 'userVerificationRequired',
+          enforceCredentialProtectionPolicy: true
+        }
+      });
+      try {
+        const assertion = await assertCredential({
+          allowCredentials: [descriptor(entry)],
+          userVerification: 'discouraged'
+        });
+        log(`level-3 credential asserted with userVerification=discouraged: ` +
+          `signature=${assertion.response.signature.byteLength} bytes. Inspect the UV bit in authenticator data.`, 'warn');
+      } catch (error) {
+        log(`level-3 assertion with userVerification=discouraged failed: ${errorText(error)}. ` +
+          'Treat this as expected only if the broker enforced a fresh UV.', 'warn');
+      }
+    },
+
+    async exclude() {
+      const entry = await ensureCredential();
+      try {
+        await createCredential({
+          user: entry.user.slice(),
+          residentKey: 'required',
+          userVerification: 'required',
+          label: 'exclude-should-fail',
+          excludeCredentials: [descriptor(entry)]
+        });
+        log('excludeCredentials did NOT reject the duplicate; the authenticator may enforce this differently.', 'warn');
+      } catch (error) {
+        if (error.name === 'InvalidStateError' || error.name === 'NotAllowedError') {
+          log(`excludeCredentials correctly rejected the duplicate: ${errorText(error)}`, 'ok');
+        } else {
+          throw error;
+        }
+      }
+    },
+
+    async cancel() {
+      const entry = await ensureCredential();
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        log('AbortController.abort() fired after 2s', 'warn');
+        controller.abort();
+      }, 2000);
+      try {
+        await assertCredential({
+          allowCredentials: [descriptor(entry)],
+          userVerification: 'required',
+          signal: controller.signal,
+          timeout: 30000
+        });
+        log('request completed before the abort; cancellation was not exercised.', 'warn');
+      } catch (error) {
+        if (error.name === 'AbortError' || error.name === 'NotAllowedError') {
+          log(`cancellation observed: ${errorText(error)}`, 'ok');
+        } else {
+          throw error;
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+
+    async concurrent() {
+      const entry = await ensureCredential();
+      const attempts = [1, 2].map((number) =>
+        assertCredential({
+          allowCredentials: [descriptor(entry)],
+          userVerification: 'required',
+          timeout: 30000
+        }).then(
+          (assertion) => `request ${number}: OK (${assertion.response.signature.byteLength} byte signature)`,
+          (error) => `request ${number}: FAIL ${errorText(error)}`
+        )
+      );
+      const results = await Promise.all(attempts);
+      results.forEach((result) => log(result, result.includes('OK') ? 'ok' : 'bad'));
+      log('Two concurrent requests: check that neither reply is delivered to the newer request.', 'warn');
+    },
+
+    async retry() {
+      const entry = await ensureCredential();
+      log('First assertion: intentionally lift your finger early to force a mismatch.', 'warn');
+      try {
+        await assertCredential({
+          allowCredentials: [descriptor(entry)],
+          userVerification: 'required',
+          timeout: 30000
+        });
+        log('first attempt succeeded; retry was not exercised. Run again and fail the first scan.', 'warn');
+        return;
+      } catch (firstError) {
+        log(`first attempt failed: ${errorText(firstError)}`, 'bad');
+      }
+      log('Retrying immediately with a fresh assertion...', 'info');
+      try {
+        const assertion = await assertCredential({
+          allowCredentials: [descriptor(entry)],
+          userVerification: 'required',
+          timeout: 30000
+        });
+        log(`retry OK: signature=${assertion.response.signature.byteLength} bytes`, 'ok');
+      } catch (secondError) {
+        log(`retry failed: ${errorText(secondError)}`, 'bad');
+      }
+    }
+  };
+
+  async function runScenario(name) {
+    if (running) return;
+    running = true;
+    buttons.forEach((button) => { button.disabled = true; });
+    const started = performance.now();
+    try {
+      section(name);
+      await scenarios[name]();
+      log(`scenario "${name}" finished`, 'ok');
+    } catch (error) {
+      log(`scenario "${name}" FAILED: ${errorText(error)}`, 'bad');
+      if (error && error.cause) log(`cause: ${errorText(error.cause)}`, 'bad');
+    } finally {
+      log(`elapsed: ${((performance.now() - started) / 1000).toFixed(2)}s`);
+      running = false;
+      buttons.forEach((button) => { button.disabled = false; });
+    }
+  }
+
+  buttons.forEach((button) => {
+    button.addEventListener('click', () => runScenario(button.dataset.run));
+  });
+
+  document.getElementById('clear').addEventListener('click', () => {
+    logEl.textContent = '';
+  });
+
+  document.getElementById('copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(logEl.textContent);
+      log('report copied to clipboard', 'ok');
+    } catch (error) {
+      log(`clipboard copy failed: ${errorText(error)}`, 'bad');
+    }
+  });
+
+  refreshCredentials();
+  log(`page loaded. origin=${location.origin} rpId=${rpId}`);
+  log('Run "Probe capabilities", then "Register baseline" before the other scenarios.');
+})();
+</script>
+</body>
+</html>

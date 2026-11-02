@@ -1,6 +1,12 @@
 # Upstream authenticator, cloned by install.sh — not part of this repo
 /passkey-tpm/
 
+# Internal planning notes
+/plans/
+
+# Local plans
+plans/
+
 # Build output
 target/
 dist/

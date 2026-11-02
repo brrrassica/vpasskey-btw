@@ -1,6 +1,7 @@
 # Troubleshooting
 
-Run the built-in checks first — they answer most questions:
+For per-site status, see [COMPATIBILITY.md](COMPATIBILITY.md). Run the built-in
+checks first — they answer most questions:
 
 ```sh
 ./verify.sh          # services, device, TPM, fingerprint enrolment
@@ -80,6 +81,24 @@ This is **expected and not a bug in your setup**. See
 authenticator, so a site that specifically asks the browser "do you have a
 built-in authenticator?" gets "no" and warns. Your passkeys still register and
 work through the *security key* path.
+
+## A site rejects a passkey that used to work
+
+This is usually a **stale credential**: the site's stored passkey no longer
+matches the credential on this machine. Delete the passkey in the site's
+security settings and register a new one.
+
+Deleting the passkey on the site invalidates only the platform-side record; it
+does **not** wipe the local key store. Re-registering creates a matching pair.
+See [COMPATIBILITY.md](COMPATIBILITY.md) for the full recovery steps.
+
+## "You already registered on this device"
+
+Expected when the site still has a passkey for your account. The registration
+request includes that credential in `excludeCredentials`, the authenticator
+matches it, and the browser refuses the duplicate as `InvalidStateError`.
+
+Delete the old passkey on the site first if you intend to replace it.
 
 ## After updating or moving files
 
