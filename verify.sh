@@ -18,13 +18,22 @@ usage: verify.sh [--bio|--prompt|--compat|--help]
 EOF
 }
 
+# The probe must never run the agent: an installed binary that predates the 0.2.0 prompt
+# patch ignores --probe-prompt and starts the agent loop instead, which used to hang this
+# script. Bound it, and say what to do when it does not answer.
 prompt_probe() {
-	local bin
+	local bin out
 	for bin in \
 		/usr/lib/passkey-tpm/passkey-tpm-agent \
 		"$ROOT/passkey-tpm/target/release/passkey-tpm-agent"; do
 		if [[ -x "$bin" ]]; then
-			"$bin" --probe-prompt
+			if ! out=$(timeout 15 "$bin" --probe-prompt 2>&1); then
+				echo "error: $bin did not report a prompt backend" >&2
+				echo "The installed agent may predate the 0.2.0 prompt patch." >&2
+				echo "Reinstall the patched build: ./install.sh" >&2
+				return 1
+			fi
+			printf '%s\n' "$out"
 			return 0
 		fi
 	done
