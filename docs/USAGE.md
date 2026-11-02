@@ -12,8 +12,9 @@ and nothing to configure in the browser.
 2. Choose to add a passkey or a security key.
 3. When the browser asks where to keep it, choose **"Use a security key"**
    (sometimes worded "USB security key" or "External security key").
-4. A notification appears naming the site. **Hold your finger on the reader for
-   about a second.**
+4. A fingerprint prompt appears naming the site. On Omarchy this is the same
+   polkit dialog as `sudo`; elsewhere it may be a notification or a terminal
+   prompt. **Hold your finger on the reader for about a second.**
 
 The browser confirms, and the passkey is stored in your TPM.
 
@@ -23,6 +24,34 @@ The browser confirms, and the passkey is stored in your TPM.
 ## Logging in
 
 Exactly the same: pick the passkey / security key option, then touch the reader.
+
+## The fingerprint prompt
+
+The prompt names the relying party the browser asked about. What you see depends
+on the session and on `PASSKEY_PROMPT`:
+
+| Backend | When it is used |
+|---|---|
+| `polkit` | Default on a graphical session where the installed polkit action and `pam_fprintd` in `/etc/pam.d/polkit-1` are available. Shows the Omarchy/desktop fingerprint card. |
+| `notification` | Fallback when polkit cannot prompt. A top-right notification asks for the fingerprint. |
+| `terminal` | Fallback when there is no graphical session, such as a TTY or an SSH login. |
+
+`PASSKEY_PROMPT=auto` is the default. It prefers polkit, then a notification,
+then the terminal. You can force a backend with
+`PASSKEY_PROMPT=polkit|notification|terminal`; an unavailable choice falls back
+to the same automatic order rather than failing the operation. `native` is
+reserved for the full-screen Omarchy overlay, which is not built yet, so it also
+falls back.
+
+A mismatch is retried up to three times, 500 ms apart. The whole request expires
+after 60 seconds by default; set `PASSKEY_UV_TIMEOUT_SECS` for a different
+deadline. Cancelling in the browser stops the prompt and any retry in progress.
+
+Check what this session will use:
+
+```sh
+./verify.sh --prompt
+```
 
 ## A local test page
 
@@ -39,6 +68,16 @@ google-chrome-stable http://localhost:8765/browser-test.html
 
 `localhost` is required — WebAuthn refuses IP-address origins such as
 `127.0.0.1`.
+
+For the larger compatibility matrix — attachment modes, resident keys, user
+verification variants, allow/exclude lists, `credProtect`, cancellation,
+concurrent requests, and retry — run:
+
+```sh
+./verify.sh --compat
+```
+
+It prints the path to `browser-test-compat.html` and the local HTTP command.
 
 ## Security-key PIN (optional)
 

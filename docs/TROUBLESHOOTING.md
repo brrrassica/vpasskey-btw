@@ -47,6 +47,12 @@ Check which prompt the broker will use:
 sudo journalctl -u passkey-tpm-uvd -b | grep 'user-verification prompt'
 ```
 
+`auto` prefers `polkit`, then `notification`, then `terminal`. If you see
+`notification` on Omarchy, polkit prompting is unavailable. If you see
+`terminal` from a graphical session, the agent did not detect a graphical
+session. `PASSKEY_PROMPT` can force a backend, but an unavailable explicit
+choice still falls back instead of failing the operation.
+
 `polkit` means the broker asks the desktop agent for each operation. It needs
 both pieces installed:
 
@@ -178,6 +184,54 @@ sudo journalctl -u passkey-tpm-uvd -b -f        # the privileged service
 ```
 
 The broker logs each request as `request uid=... command=... len=...`.
+
+## Collecting a redacted trace
+
+Run the doctor before changing anything, so the report shows the failing state:
+
+```sh
+./scripts/passkey-doctor.sh --output passkey-doctor.txt
+```
+
+It collects service state, recent journals, `passkey-tpm info`, TPM and
+fido2-token facts, fingerprint enrolment, browser versions, and Omarchy /
+Hyprland detection. Credential IDs and long binary values are replaced with
+placeholders. Review the file before sharing it.
+
+To capture what happens during one failing operation, run a trace and perform
+the browser flow while it records:
+
+```sh
+./scripts/passkey-doctor.sh --trace 30
+```
+
+The broker side needs passwordless `sudo`; without it the report records only
+the agent side and says so. To sanitize an existing capture, use
+`--redact FILE`.
+
+For a repeatable real-site record — options skeleton, redacted doctor output,
+and journal trace — use the capture kit:
+
+```sh
+./scripts/capture-webauthn-site.sh --site cloudflare --flow authenticate
+./scripts/capture-webauthn-site.sh --site openrouter --flow register
+```
+
+The protocol and the fields to record are in
+[plans/compat/README.md](../plans/compat/README.md). The site flows need a real
+authenticated browser session and a physical fingerprint scan.
+
+## Checking the compatibility matrix
+
+```sh
+./verify.sh --compat
+```
+
+This prints the path to `browser-test-compat.html` and the local HTTP command.
+The page exercises attachment mode, resident keys, user verification, allow and
+exclude lists, `credProtect`, cancellation, concurrent requests, and retry after
+one mismatch. Use it to separate a browser/site policy problem from an
+authenticator problem before filing an issue.
 
 ## Start over
 

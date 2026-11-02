@@ -29,6 +29,7 @@ small services:
         ▼
  ┌───────────────────────────┐        your login session
  │  passkey-tpm-agent         │  creates the virtual key via /dev/uhid
+ │  prompt backend selector   │  picks polkit / notification / terminal
  └───────────────────────────┘
         │  D-Bus (io.github.dangerousplay.PasskeyTpm1)
         ▼
@@ -37,28 +38,36 @@ small services:
  └───────────────────────────┘
         │                         │
         ▼                         ▼
-   TPM 2.0  ────────────────   polkit ── PAM (pam_fprintd) ── reader
+   TPM 2.0  ────────────────   polkit ── desktop agent ── PAM (pam_fprintd) ── reader
    (private keys, wrapped)      │
                                 └─ or fprintd directly (fallback)
 ```
 
 - The **agent** runs as you. It creates a virtual HID device through
   `/dev/uhid`, so the kernel and every browser treat it like a real security
-  key. It holds no secrets.
+  key. It holds no secrets. It also selects the prompt backend from
+  `PASSKEY_PROMPT` and the detected session, and reports the choice through
+  `passkey-tpm-agent --probe-prompt` (`./verify.sh --prompt`).
 - The **broker** runs as a dedicated `passkey-tpm` system account. It is the
   only process that touches the TPM. It is also the only process allowed to
   ask `fprintd` to verify a fingerprint on your behalf (via a narrow Polkit
   rule), and it owns the `io.github.dangerousplay.PasskeyTpm1.verify` polkit
-  action used for the desktop prompt.
+  action used for the desktop prompt. The broker remains the only authority
+  that can turn a scan into a successful verification result.
 - When a browser asks the virtual key to sign, the broker checks that **you have
   an active local session**, asks for a **fingerprint**, and only a successful
-  check unlocks the TPM key for that one operation.
+  check unlocks the TPM key for that one operation. A mismatch is retried up to
+  three times within one overall deadline (`PASSKEY_UV_TIMEOUT_SECS`, 60 s by
+  default).
 - On Omarchy the check is delegated to polkit: the broker calls
   `CheckAuthorization` for your agent's bus name, and the desktop polkit agent
   shows its native fingerprint card. The actual scan is done by
   `pam_fprintd` in `/etc/pam.d/polkit-1`, the same stack `sudo` uses. If that
   module is not configured, the broker keeps the direct `fprintd` path and the
   agent shows a notification instead.
+- A future full-screen Omarchy layer-shell overlay is **not built yet**. Until
+  it exists, `PASSKEY_PROMPT=native` is detected and then falls through to the
+  working backend instead of failing the operation.
 
 ## The security model
 

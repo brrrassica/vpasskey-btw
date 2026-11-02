@@ -34,6 +34,11 @@ browser. Browsers treat it like a plugged-in FIDO2 key, except:
 - it works in all native browsers at once, with nothing to install in the
   browser.
 
+On Omarchy the fingerprint request opens the same **polkit dialog** as `sudo`.
+If that dialog is unavailable, a notification or terminal prompt is used
+instead. A mismatch is retried up to three times before the request fails, and
+the deadline is 60 seconds by default.
+
 ## Requirements
 
 - Linux with a TPM 2.0.
@@ -61,6 +66,12 @@ Check that it is running:
 ./verify.sh
 ```
 
+For the selected prompt backend:
+
+```sh
+./verify.sh --prompt
+```
+
 For a full registration and login test, see [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Use it
@@ -78,6 +89,11 @@ A step-by-step guide, including optional PIN setup and local testing, is in
 [docs/USAGE.md](docs/USAGE.md).
 
 ## Status and compatibility
+
+`vpasskey-btw` 0.2.0 is a development release. It upgrades the pinned
+authenticator to `passkey-tpm v0.1.0-beta.2`, adds the polkit fingerprint
+prompt, retries, a configurable verification timeout, and safer installers. See
+[CHANGELOG.md](CHANGELOG.md) for the full list.
 
 Verified on the reference Omarchy machine in Chrome and Chromium:
 
@@ -130,10 +146,11 @@ The security model and architecture are explained in
 | Guide | What it covers |
 |---|---|
 | [Install](docs/INSTALL.md) | requirements, installation, verification, uninstall |
-| [Usage](docs/USAGE.md) | registering, signing in, PINs, managing passkeys |
+| [Usage](docs/USAGE.md) | registering, signing in, PINs, prompt backends, managing passkeys |
 | [How it works](docs/HOW-IT-WORKS.md) | architecture and security model |
 | [Compatibility](docs/COMPATIBILITY.md) | tested browsers and sites, known limits |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | diagnosing and fixing problems |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | diagnosing and fixing problems, collecting a trace |
+| [Changelog](CHANGELOG.md) | release-by-release changes and upgrade notes |
 | [Credits](docs/CREDITS.md) | upstream projects and licenses |
 
 ## Credits
