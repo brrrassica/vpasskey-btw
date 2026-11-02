@@ -5,18 +5,74 @@
 # Run as your normal user; privileged steps use sudo.
 set -euo pipefail
 
-REPO_URL="https://github.com/dangerousplay/passkey-tpm"
-TAG="${PASSKEY_TPM_TAG:-v0.1.0-beta.1}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$ROOT/passkey-tpm"
 LIBEXECDIR="/usr/lib"   # Arch policy (rather than /usr/libexec)
+VERSIONS_FILE="$ROOT/versions.env"
 
 log() { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
+die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
-if [[ ! -d "$SRC/.git" ]]; then
-	log "Cloning passkey-tpm @ $TAG"
-	git clone --depth 1 --branch "$TAG" "$REPO_URL" "$SRC"
+# Remember whether the caller overrode the pin, so a custom REF without a
+# custom COMMIT does not get checked against versions.env's commit.
+CUSTOM_REF=0
+CUSTOM_COMMIT=0
+[[ -n "${PASSKEY_TPM_REF:-}" ]] && CUSTOM_REF=1
+[[ -n "${PASSKEY_TPM_COMMIT:-}" ]] && CUSTOM_COMMIT=1
+
+[[ -f "$VERSIONS_FILE" ]] || die "missing $VERSIONS_FILE"
+# shellcheck source=versions.env
+source "$VERSIONS_FILE"
+
+REPO_URL="${PASSKEY_TPM_REPO:-}"
+REF="${PASSKEY_TPM_REF:-}"
+COMMIT="${PASSKEY_TPM_COMMIT:-}"
+[[ -n "$REPO_URL" ]] || die "PASSKEY_TPM_REPO is not set"
+[[ -n "$REF" ]] || die "PASSKEY_TPM_REF is not set"
+if (( CUSTOM_REF && ! CUSTOM_COMMIT )); then
+	log "Custom PASSKEY_TPM_REF=$REF; commit verification disabled"
+	COMMIT=""
 fi
+
+# Fetch the pinned ref and check out its exact commit. Works for a fresh
+# clone, an existing checkout on another branch, and a stale checkout left
+# behind by an older install.sh.
+sync_source() {
+	if [[ ! -d "$SRC/.git" ]]; then
+		log "Cloning $REPO_URL"
+		mkdir -p "$(dirname "$SRC")"
+		git clone --no-checkout --filter=blob:none "$REPO_URL" "$SRC"
+	else
+		local origin_url
+		origin_url="$(git -C "$SRC" remote get-url origin 2>/dev/null || true)"
+		if [[ "$origin_url" != "$REPO_URL" ]]; then
+			die "existing checkout $SRC tracks '${origin_url:-<none>}', expected '$REPO_URL'. Remove it or set PASSKEY_TPM_REPO."
+		fi
+		if ! git -C "$SRC" diff --quiet || ! git -C "$SRC" diff --cached --quiet; then
+			die "$SRC has local changes; commit or stash them before installing."
+		fi
+	fi
+
+	log "Fetching $REF from origin"
+	git -C "$SRC" fetch --depth 1 --force origin "$REF"
+
+	local resolved
+	resolved="$(git -C "$SRC" rev-parse --verify 'FETCH_HEAD^{commit}')"
+	if [[ -n "$COMMIT" && "$resolved" != "$COMMIT" ]]; then
+		die "$REF resolved to $resolved, expected $COMMIT"
+	fi
+
+	log "Checking out ${COMMIT:-$resolved}"
+	git -C "$SRC" -c advice.detachedHead=false checkout --detach "$resolved"
+	local head
+	head="$(git -C "$SRC" rev-parse HEAD)"
+	[[ "$head" == "$resolved" ]] || die "checkout produced $head, expected $resolved"
+	if [[ -n "$COMMIT" ]]; then
+		log "Verified source integrity: $COMMIT"
+	fi
+}
+
+sync_source
 
 log "Building release binaries"
 ( cd "$SRC" && cargo build --release )
