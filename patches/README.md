@@ -10,7 +10,7 @@ upstream pin from [`versions.env`](../versions.env):
 
 The pin (`v0.1.0-brrr1`) already contains patches 0001–0003, so `install.sh`
 checks a per-patch marker and skips only the patches already in the tree. Patches
-0004 and 0005 are newer than the pin and are applied on top of it. The series
+0004–0007 are newer than the pin and are applied on top of it. The series
 remains the reference for older pristine pins, and the pin itself still keeps
 its SHA integrity check. When you add a patch, add its marker check to the
 `patch_marker` function in [`install.sh`](../install.sh:189) and list it here.
@@ -102,6 +102,23 @@ its SHA integrity check. When you add a patch, add its marker check to the
    extension output.
  - Marker: the `hmac_secret_applies_only_to_the_first_assertion` test name in
    `crates/core/src/ctap2/tests.rs`.
+- `0007-0.2.0-uv-pin-status-coverage.patch`
+  - M3.6: the mismatch that reaches the built-in UV retry limit is now reported
+    as `CTAP2_ERR_UV_BLOCKED` on that attempt instead of a generic
+    `CTAP2_ERR_OPERATION_DENIED` (CTAP 2.1 §6.5.2.2), which also closes the open
+    M3.2 line. Later requests keep returning `UV_BLOCKED`.
+  - M3.6: the `uv` option is type-checked in `makeCredential` (key 7) and
+    `getAssertion` (key 5). It was previously ignored, so `uv: 1` was silently
+    accepted. `uv: false` (WebAuthn "discouraged") still verifies the user
+    because every credential is created at credProtect level 3; CTAP 2.1
+    §6.1.2/§6.2.2 permits the stricter behaviour.
+  - M3.6: tests pin the required/preferred/discouraged matrix with and without a
+    fingerprint reader and PIN (`NOT_ALLOWED`, `PUAT_REQUIRED`, UV flag set), the
+    PIN/UV status matrix (`PIN_NOT_SET`, `PIN_INVALID`, `PIN_AUTH_BLOCKED`,
+    `PIN_BLOCKED`, token permission errors), and every status constant against
+    CTAP 2.1 §8.2. Status values themselves are unchanged.
+  - Marker: the `status_codes_match_ctap_21_section_8_2` test name in
+    `crates/core/src/ctap2/tests.rs`.
 
 ## Refreshing a patch
 

@@ -215,6 +215,10 @@ patch_marker() {
 			grep -q 'hmac_secret_applies_only_to_the_first_assertion' \
 				"$SRC/crates/core/src/ctap2/tests.rs"
 			;;
+		0007-*)
+			grep -q 'status_codes_match_ctap_21_section_8_2' \
+				"$SRC/crates/core/src/ctap2/tests.rs"
+			;;
 		*)
 			return 1
 			;;
