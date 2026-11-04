@@ -9,7 +9,7 @@ The tested browser and site status is not repeated here. See
 [plans/towards-0.2.0.md](plans/towards-0.2.0.md) for the release plan and open
 items.
 
-## [Unreleased] — 0.2.0-dev
+## [Unreleased] — 0.2.0-dev.1
 
 ### Added
 
@@ -77,8 +77,17 @@ items.
   more time.
 - The installer no longer skips a stale `passkey-tpm/` checkout, so a fresh
   install and an upgrade install both build the pinned commit.
-- `install.sh` no longer leaves `/usr/bin/passkey-tpm-tray` unmanaged or
-  user-owned.
+- The installer's already-installed fast path reads the version field correctly
+  and compares the recorded pin and local patch series, so a new patch is no
+  longer skipped while the upstream tag stays the same.
+- The installer selects the staging tree from the version it just built instead
+  of the lexicographically last `target/dist` directory, so a downgrade or ref
+  override no longer installs a stale release.
+- The tray is now managed as part of the package: `install.sh` installs the
+  staged `/etc/xdg/autostart/passkey-tpm-tray.desktop` as `root:root`, and
+  `uninstall.sh` removes both `/usr/bin/passkey-tpm-tray` and that autostart
+  entry. Previously the uninstaller left the tray binary behind and the
+  installer never copied the autostart file.
 - `enforceCredentialProtectionPolicy` is validated instead of silently ignored;
   a `true` flag without a `credProtect` policy now returns
   `CTAP2_ERR_INVALID_OPTION`.
