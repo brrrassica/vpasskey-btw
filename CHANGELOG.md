@@ -9,7 +9,10 @@ The tested browser and site status is not repeated here. See
 [plans/towards-0.2.0.md](plans/towards-0.2.0.md) for the release plan and open
 items.
 
-## [Unreleased] — 0.2.0-dev.1
+## [0.1.5] — 2026-11-04
+
+A halfway release between 0.1.0 and 0.2.0, carrying the installer reliability
+fixes and the tray lifecycle fixes.
 
 ### Added
 
