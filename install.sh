@@ -70,16 +70,44 @@ if (( SHOW_VERSION )); then
 	exit 0
 fi
 
-# REF is normally a tag like v0.1.0-beta.2; strip the leading v for comparing
+# REF is normally a tag like v0.1.0-brrr1; strip the leading v for comparing
 # with `passkey-tpm version`.
 TARGET_VERSION="${REF#v}"
 
-# Skip a pointless rebuild unless the user asks to reinstall. The installed
-# version is the authoritative check: the wrapper pin is a tag, not a commit.
-# --dry-run always prints the plan, even when the installed version matches.
+patch_files() {
+	[[ -d "$PATCH_DIR" ]] || return 0
+	local patches=("$PATCH_DIR"/*.patch)
+	[[ -e "${patches[0]}" ]] || return 0
+	printf '%s\n' "${patches[@]}"
+}
+
+# The installed CLI reports only the upstream package version, so a pin that
+# stays on the same tag cannot tell us whether the local patch series changed.
+# Record the pin and a fingerprint of the patch contents with the install, and
+# use both when deciding whether a rebuild is needed.
+INSTALL_STAMP="/usr/lib/passkey-tpm/install-state"
+install_state() {
+	local patches_hash
+	patches_hash="$(
+		while IFS= read -r patch; do
+			printf '%s\n' "$(basename "$patch")"
+			sha256sum < "$patch"
+		done < <(patch_files) | sha256sum | awk '{print $1}'
+	)"
+	printf 'wrapper=%s\nref=%s\ncommit=%s\npatches=%s\n' \
+		"$WRAPPER_VERSION" "$REF" "${COMMIT:-}" "$patches_hash"
+}
+INSTALL_STATE="$(install_state)"
+
+# Skip a pointless rebuild unless the user asks to reinstall. Both the
+# installed version and the full install state must match: a matching version
+# with a stale patch series still needs a rebuild. --dry-run always prints the
+# plan, even when the installed version matches.
 if (( ! FORCE && ! DRY_RUN )) && command -v passkey-tpm >/dev/null 2>&1; then
-	installed_version="$(passkey-tpm version 2>/dev/null | awk '{print $1}' || true)"
-	if [[ "$installed_version" == "$TARGET_VERSION" ]]; then
+	installed_version="$(passkey-tpm version 2>/dev/null | awk '{print $2}' || true)"
+	installed_state="$(cat "$INSTALL_STAMP" 2>/dev/null || true)"
+	if [[ "$installed_version" == "$TARGET_VERSION" ]] \
+		&& [[ "$installed_state" == "$INSTALL_STATE" ]]; then
 		log "passkey-tpm $installed_version is already installed; use --force to reinstall"
 		exit 0
 	fi
@@ -89,15 +117,18 @@ fi
 # cargo xtask dist and the uninstaller.
 BIN_FILES=(
 	/usr/bin/passkey-tpm
+	/usr/bin/passkey-tpm-tray
 	/usr/lib/passkey-tpm/passkey-tpm-agent
 	/usr/lib/passkey-tpm/passkey-tpm-uvd
 )
 CONF_FILES=(
+	/etc/xdg/autostart/passkey-tpm-tray.desktop
 	/usr/lib/systemd/system/passkey-tpm-uvd.service
 	/usr/lib/systemd/user/passkey-tpm-agent.service
 	/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf
 	/usr/share/dbus-1/system-services/io.github.dangerousplay.PasskeyTpm1.service
 	/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules
+	/usr/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy
 	/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules
 	/usr/lib/sysusers.d/passkey-tpm.conf
 	/usr/lib/modules-load.d/passkey-tpm.conf
@@ -107,13 +138,6 @@ TREE_PATHS=(
 	/usr/share/doc/passkey-tpm
 	/usr/share/licenses/passkey-tpm
 )
-
-patch_files() {
-	[[ -d "$PATCH_DIR" ]] || return 0
-	local patches=("$PATCH_DIR"/*.patch)
-	[[ -e "${patches[0]}" ]] || return 0
-	printf '%s\n' "${patches[@]}"
-}
 
 if (( DRY_RUN )); then
 	cat <<EOF
@@ -130,13 +154,17 @@ libexecdir:       $LIBEXECDIR
 Would sync the source checkout (clone/fetch/checkout as needed).
 EOF
 	while IFS= read -r patch; do
-		[[ -n "$patch" ]] && printf 'Would apply patch: %s\n' "$patch"
+		[[ -n "$patch" ]] && printf 'Would ensure patch (skipped only if already in the tree): %s\n' "$patch"
 	done < <(patch_files)
 	cat <<EOF
 Would build release binaries and stage a dist tree.
-Would install (root-owned, 0755 binaries / 0644 config):
+Would install, file by file as root (0755 binaries / 0644 config, no recursive
+copy and no recursive chown), these paths and their staged siblings:
 $(printf '  %s\n' "${BIN_FILES[@]}" "${CONF_FILES[@]}")
-Would strip ACLs/xattrs and verify no named ACL entries remain.
+Would refuse to start if any of their parent directories is not root-owned.
+Would verify afterwards that no shared system directory changed owner or mode.
+Would strip ACLs and verify no named ACL entries remain.
+Would record the pin and patch state in /usr/lib/passkey-tpm/install-state.
 Would run systemd-sysusers, modprobe uhid, udev/dbus/systemd reloads.
 Would enable and start passkey-tpm-agent for this user.
 EOF
@@ -181,13 +209,57 @@ sync_source() {
 	fi
 }
 
-# Apply the tracked local patch series on top of the pristine upstream
-# checkout, then commit it so the next run's dirty-checkout guard still sees a
-# clean tree. The files under patches/ remain the source of truth.
+# The pinned fork release already carries most of this series, and a later
+# patch might not be in the pin yet. Each patch therefore has its own marker:
+# the bit of tree it produces. Checking markers per patch (rather than one
+# all-or-nothing marker) lets a pin that already has 0001..0003 receive a new
+# 0004 without replaying the old patches. When you add a patch, add its marker
+# here and to patches/README.md.
+patch_marker() {
+	case "$(basename "$1")" in
+		0001-*)
+			[[ -e "$SRC/crates/agent/src/prompt.rs" ]]
+			;;
+		0002-*)
+			grep -q 'uvModality' "$SRC/crates/core/src/ctap2/info.rs"
+			;;
+		0003-*)
+			[[ -e "$SRC/crates/uv/src/polkit.rs" ]]
+			;;
+		0004-*)
+			grep -q 'enforceCredentialProtectionPolicy' \
+				"$SRC/crates/core/src/ctap2/make_credential.rs"
+			;;
+		0005-*)
+			grep -q 'empty allowList means' \
+				"$SRC/crates/core/src/ctap2/get_assertion.rs"
+			;;
+		0006-*)
+			grep -q 'hmac_secret_applies_only_to_the_first_assertion' \
+				"$SRC/crates/core/src/ctap2/tests.rs"
+			;;
+		0007-*)
+			grep -q 'status_codes_match_ctap_21_section_8_2' \
+				"$SRC/crates/core/src/ctap2/tests.rs"
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+# Apply the tracked local patch series, then commit it so the next run's
+# dirty-checkout guard still sees a clean tree. The files under patches/ remain
+# the source of truth.
 apply_patches() {
 	local patch
+
 	while IFS= read -r patch; do
 		[[ -n "$patch" ]] || continue
+		if patch_marker "$patch"; then
+			log "Already present in ${COMMIT:-$REF}: $(basename "$patch")"
+			continue
+		fi
 		log "Applying $(basename "$patch")"
 		if ! git -C "$SRC" apply --check "$patch"; then
 			die "$(basename "$patch") does not apply to ${COMMIT:-$REF}; refresh the patch series"
@@ -212,37 +284,121 @@ log "Building release binaries"
 
 log "Staging FHS install tree (libexecdir=$LIBEXECDIR)"
 ( cd "$SRC" && cargo xtask dist --no-build --libexecdir "$LIBEXECDIR" )
-STAGE="$(find "$SRC/target/dist" -maxdepth 1 -type d -name 'passkey-tpm-*' | sort | tail -1)"
-[[ -n "$STAGE" ]] || { echo "staging tree not found" >&2; exit 1; }
+# cargo xtask dist names its tree after the checked-out workspace version, not
+# after the requested ref. Derive that exact path so a stale higher version
+# left by an earlier install (or a downgrade) cannot be selected.
+dist_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$SRC/Cargo.toml" | head -n 1)"
+[[ -n "$dist_version" ]] || die "could not read the workspace version from $SRC/Cargo.toml"
+STAGE="$SRC/target/dist/passkey-tpm-$dist_version"
+[[ -d "$STAGE/usr" ]] || die "staging tree not found: $STAGE"
 
 log "Stopping running services before replacing binaries"
 systemctl --user stop passkey-tpm-agent 2>/dev/null || true
 sudo systemctl stop passkey-tpm-uvd 2>/dev/null || true
 
 log "Installing files into / (sudo)"
-# Do NOT use `cp -a`/`-p` here: the staging tree is owned by the invoking user,
-# and preserving ACLs or xattrs would leave them writable by that user even
-# after chown (issue #3). --remove-destination also avoids inheriting ACLs
-# from a pre-existing installed file.
-sudo cp -r --no-preserve=all --remove-destination "$STAGE/usr/." /usr/
-sudo chown root:root "${BIN_FILES[@]}" "${CONF_FILES[@]}"
-sudo chown -R root:root "${TREE_PATHS[@]}"
-sudo chmod 0755 "${BIN_FILES[@]}"
-sudo chmod 0644 "${CONF_FILES[@]}"
-sudo chmod 0755 "${TREE_PATHS[@]}"
+# Do NOT copy the staging tree into /usr. `cp -a` preserves the invoking user's
+# ownership, and `cp -r` still rewrites directories this project does not own:
+# on 2026-11-02 that left 19 directories under /usr owned by a normal user.
+# Install one staged file at a time via `install`, which sets the owner, group
+# and mode of the file itself and never recurses. Then prove that no shared
+# system directory changed owner or mode.
+# cargo xtask dist also stages the tray's XDG autostart entry under etc/.
+# Install it from the same tree so the package and the uninstaller agree on
+# what the tray owns.
+STAGE_ROOTS=("$STAGE/usr")
+[[ -d "$STAGE/etc" ]] && STAGE_ROOTS+=("$STAGE/etc")
+STAGED_FILES=()
+while IFS= read -r -d '' staged; do
+	STAGED_FILES+=("${staged#"$STAGE"}")
+done < <(find "${STAGE_ROOTS[@]}" -type f -print0 | sort -z)
+(( ${#STAGED_FILES[@]} > 0 )) || die "staging tree $STAGE has no files"
 
-# Belt and braces: cp is not supposed to copy ACLs now, but strip any that are
-# present and fail the install if a named entry survived.
+# Shared parents outside /usr must already exist and be root-owned. The tray
+# autostart directory is normally present on a desktop system; create it only
+# when missing, before the preflight snapshot, so the install never adopts or
+# re-modes an existing shared directory.
+for dest in "${STAGED_FILES[@]}"; do
+	[[ "$dest" == /usr/* ]] && continue
+	parent="$(dirname -- "$dest")"
+	if [[ ! -d "$parent" ]]; then
+		sudo install -d -o root -g root -m 0755 "$parent"
+	fi
+done
+
+# Everything outside the project's own trees goes into shared directories; those
+# are checked before and after the install.
+SHARED_DESTS=()
+for dest in "${STAGED_FILES[@]}"; do
+	for tree in "${TREE_PATHS[@]}"; do
+		if [[ "$dest" == "$tree"/* ]]; then
+			continue 2
+		fi
+	done
+	SHARED_DESTS+=("$dest")
+done
+
+CHECK_TARGETS="$ROOT/scripts/check-install-targets.sh"
+[[ -x "$CHECK_TARGETS" ]] || die "missing $CHECK_TARGETS"
+SNAPSHOT="$(mktemp)"
+trap 'rm -f "$SNAPSHOT"' EXIT
+if (( ${#SHARED_DESTS[@]} > 0 )); then
+	if ! "$CHECK_TARGETS" --snapshot "$SNAPSHOT" "${SHARED_DESTS[@]}"; then
+		die "could not read the install target directories"
+	fi
+	if ! "$CHECK_TARGETS" "${SHARED_DESTS[@]}"; then
+		die "refusing to install into directories that are not root-owned; repair them first (see docs/TROUBLESHOOTING.md)"
+	fi
+fi
+
+# The project's own trees are ours to create; only their staged files are copied
+# into them, each one explicitly root-owned.
+sudo install -d -o root -g root -m 0755 "${TREE_PATHS[@]}"
+
+for dest in "${STAGED_FILES[@]}"; do
+	case "$dest" in
+		/usr/bin/*|/usr/lib/passkey-tpm/*) mode=0755 ;;
+		*) mode=0644 ;;
+	esac
+	sudo install -o root -g root -m "$mode" "$STAGE$dest" "$dest"
+done
+
+# Belt and braces for the ownership bug this replaced: the shared directories
+# must be byte-for-byte unchanged in owner, group and mode.
+if (( ${#SHARED_DESTS[@]} > 0 )) \
+	&& ! "$CHECK_TARGETS" --compare "$SNAPSHOT" "${SHARED_DESTS[@]}"; then
+	die "the install changed a shared system directory; inspect /usr before continuing"
+fi
+
+# The contract: every managed file exists, is root-owned, and has no ACLs. The
+# staging tree belongs to the invoking user, so any named ACL or foreign owner
+# here means the install is not trustworthy.
+for dest in "${BIN_FILES[@]}" "${CONF_FILES[@]}"; do
+	[[ -f "$dest" ]] || die "expected file was not installed: $dest"
+	[[ "$(stat -c '%u:%g' "$dest")" == "0:0" ]] || die "$dest is not root-owned"
+done
+
+# Record the pin and patch state used by this install only after the files have
+# been verified. It lives in the project's own tree, so uninstall.sh removes it
+# with the rest.
+printf '%s\n' "$INSTALL_STATE" | sudo tee "$INSTALL_STAMP" >/dev/null
+sudo chown root:root "$INSTALL_STAMP"
+sudo chmod 0644 "$INSTALL_STAMP"
+
 if command -v setfacl >/dev/null 2>&1; then
-	sudo setfacl -bR "${BIN_FILES[@]}" "${CONF_FILES[@]}" "${TREE_PATHS[@]}"
+	sudo setfacl -bR "${TREE_PATHS[@]}"
+	sudo setfacl -b -- "${STAGED_FILES[@]}"
 fi
 if command -v getfacl >/dev/null 2>&1; then
-	if sudo getfacl -pR "${BIN_FILES[@]}" "${CONF_FILES[@]}" "${TREE_PATHS[@]}" 2>/dev/null \
-		| grep -Eq '^user:[^:]+:'; then
+	if sudo getfacl -pR "${TREE_PATHS[@]}" 2>/dev/null | grep -Eq '^user:[^:]+:'; then
+		die "installed tree still carries a named ACL entry; refusing to continue"
+	fi
+	if sudo getfacl -p -- "${STAGED_FILES[@]}" 2>/dev/null | grep -Eq '^user:[^:]+:'; then
 		die "installed files still carry a named ACL entry; refusing to continue"
 	fi
 	log "Verified: installed files have no named ACL entries"
 fi
+log "Verified: shared system directories unchanged"
 
 log "Creating broker user (passkey-tpm, member of tss)"
 sudo systemd-sysusers /usr/lib/sysusers.d/passkey-tpm.conf

@@ -12,11 +12,28 @@ Henrique ([@dangerousplay](https://github.com/dangerousplay))**.
 - License: MIT OR Apache-2.0
 - It implements the TPM-backed virtual security key, the broker/agent split, the
   CTAP2 logic, the fprintd user verification, and the packaging files.
-- This project pins it through `versions.env`, currently `v0.1.0-beta.2`, builds
-  it from source, and applies the local patches in `patches/`.
+- This project pins it through `versions.env`, currently `v0.1.0-brrr1` from
+  the [`brrrassica` fork](https://github.com/brrrassica/passkey-tpm) (commit
+  `dc4fda7`), builds it from source, and keeps the local patches in `patches/`
+  for older pristine pins.
 
 If you find a bug in the passkey behaviour itself, it most likely belongs
 upstream.
+
+## Local patches
+
+These changes were maintained here and are now included in the pinned fork
+release `v0.1.0-brrr1`; `install.sh` applies them only when the pin lacks them:
+
+| Patch | Purpose |
+|---|---|
+| [`0001`](../patches/0001-0.2.0-retries-timeouts-prompt-foundation.patch) | fingerprint retry loop, configurable UV timeout, broker-timeout alignment, and the agent prompt backend selector |
+| [`0002`](../patches/0002-0.2.0-getinfo-advertisement-audit.patch) | `getInfo` advertisement audit: derived `firmwareVersion`, `uvModality`, enforced limit aliases, and a regression test |
+| [`0003`](../patches/0003-0.2.0-polkit-fingerprint-prompt.patch) | polkit fingerprint prompt driven by the broker, with direct `fprintd` as the fallback |
+
+The wrapper's installer, scripts, test pages, and documentation are original to
+this project. Patches 0001–0003 remain under the upstream MIT OR Apache-2.0
+terms because they modify upstream code.
 
 ## Lineage of the idea
 
@@ -41,7 +58,7 @@ Related prior art worth knowing:
 | [fprintd](https://gitlab.freedesktop.org/libfprint/fprintd) / [libfprint](https://gitlab.freedesktop.org/libfprint/libfprint) | fingerprint verification | LGPL-2.1+ |
 | [tpm2-tss](https://github.com/tpm2-software/tpm2-tss) | TPM 2.0 access | BSD-2-Clause |
 | [systemd](https://systemd.io/) | services, sessions, sysusers | LGPL-2.1+ |
-| [polkit](https://gitlab.freedesktop.org/polkit/polkit) | authorising fprintd for the broker | LGPL-2.0+ |
+| [polkit](https://gitlab.freedesktop.org/polkit/polkit) | authorising fprintd for the broker and rendering the desktop fingerprint prompt | LGPL-2.0+ |
 | [libfido2](https://github.com/Yubico/libfido2) | diagnostic tools (`fido2-token`) | BSD-2-Clause |
 
 ## This project

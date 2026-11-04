@@ -26,9 +26,14 @@ authenticator, installs the system integration, and starts it.
 1. Open a site that supports passkeys, such as <https://webauthn.io>.
 2. Choose to add a passkey or a security key.
 3. When the browser asks where to keep it, choose **"Use a security key"**.
-4. **Hold your finger on the reader for about a second.**
+4. A fingerprint prompt appears naming the site. **Hold your finger on the
+   reader for about a second.**
 
 That is all. Next time, choose the same option and touch the reader again.
+
+On Omarchy the prompt is the same polkit dialog as `sudo`; a notification or a
+terminal prompt is used when polkit cannot prompt. Check this session's choice
+with `./verify.sh --prompt`.
 
 ## Guides
 

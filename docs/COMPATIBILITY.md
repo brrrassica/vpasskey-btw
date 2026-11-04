@@ -5,7 +5,7 @@
 - Omarchy 4.0.6 on Arch Linux, Hyprland 0.56.2 (Wayland).
 - Lenovo ThinkPad E14 Gen 4, TPM 2.0, Goodix 550A fingerprint reader.
 - Chrome 156 and Chromium 156 (native Arch packages).
-- `passkey-tpm` 0.1.0-beta.2, installed by this project.
+- `passkey-tpm` 0.1.0-brrr1, installed by this project.
 
 ## Site matrix
 

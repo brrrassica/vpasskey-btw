@@ -66,8 +66,9 @@ wrapper: vpasskey-btw $WRAPPER_VERSION
 purge:   $([[ "$PURGE" == "1" ]] && echo yes || echo no)
 
 Would stop and disable passkey-tpm-agent and passkey-tpm-uvd.
-Would remove /usr/lib/passkey-tpm, /usr/bin/passkey-tpm, and the installed
-systemd, D-Bus, polkit, udev, sysusers, and modules-load files.
+Would remove /usr/lib/passkey-tpm, /usr/bin/passkey-tpm,
+/usr/bin/passkey-tpm-tray, /etc/xdg/autostart/passkey-tpm-tray.desktop, and
+the installed systemd, D-Bus, polkit, udev, sysusers, and modules-load files.
 EOF
 	if (( PURGE )); then
 		echo "Would purge /var/lib/passkey-tpm and the passkey-tpm user/group."
@@ -89,13 +90,16 @@ log "Stopping broker"
 ignore_missing sudo systemctl stop passkey-tpm-uvd
 
 log "Removing installed files"
-sudo rm -rf /usr/lib/passkey-tpm /usr/bin/passkey-tpm
+sudo rm -rf /usr/lib/passkey-tpm
+sudo rm -f /usr/bin/passkey-tpm /usr/bin/passkey-tpm-tray
 sudo rm -f \
+	/etc/xdg/autostart/passkey-tpm-tray.desktop \
 	/usr/lib/systemd/system/passkey-tpm-uvd.service \
 	/usr/lib/systemd/user/passkey-tpm-agent.service \
 	/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf \
 	/usr/share/dbus-1/system-services/io.github.dangerousplay.PasskeyTpm1.service \
 	/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules \
+	/usr/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy \
 	/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules \
 	/usr/lib/modules-load.d/passkey-tpm.conf \
 	/usr/lib/sysusers.d/passkey-tpm.conf
