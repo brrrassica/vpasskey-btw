@@ -77,6 +77,12 @@ items.
   more time.
 - The installer no longer skips a stale `passkey-tpm/` checkout, so a fresh
   install and an upgrade install both build the pinned commit.
+- The installer's already-installed fast path reads the version field correctly
+  and compares the recorded pin and local patch series, so a new patch is no
+  longer skipped while the upstream tag stays the same.
+- The installer selects the staging tree from the version it just built instead
+  of the lexicographically last `target/dist` directory, so a downgrade or ref
+  override no longer installs a stale release.
 - `install.sh` no longer leaves `/usr/bin/passkey-tpm-tray` unmanaged or
   user-owned.
 - `enforceCredentialProtectionPolicy` is validated instead of silently ignored;

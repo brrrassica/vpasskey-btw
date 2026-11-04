@@ -74,12 +74,40 @@ fi
 # with `passkey-tpm version`.
 TARGET_VERSION="${REF#v}"
 
-# Skip a pointless rebuild unless the user asks to reinstall. The installed
-# version is the authoritative check: the wrapper pin is a tag, not a commit.
-# --dry-run always prints the plan, even when the installed version matches.
+patch_files() {
+	[[ -d "$PATCH_DIR" ]] || return 0
+	local patches=("$PATCH_DIR"/*.patch)
+	[[ -e "${patches[0]}" ]] || return 0
+	printf '%s\n' "${patches[@]}"
+}
+
+# The installed CLI reports only the upstream package version, so a pin that
+# stays on the same tag cannot tell us whether the local patch series changed.
+# Record the pin and a fingerprint of the patch contents with the install, and
+# use both when deciding whether a rebuild is needed.
+INSTALL_STAMP="/usr/lib/passkey-tpm/install-state"
+install_state() {
+	local patches_hash
+	patches_hash="$(
+		while IFS= read -r patch; do
+			printf '%s\n' "$(basename "$patch")"
+			sha256sum < "$patch"
+		done < <(patch_files) | sha256sum | awk '{print $1}'
+	)"
+	printf 'wrapper=%s\nref=%s\ncommit=%s\npatches=%s\n' \
+		"$WRAPPER_VERSION" "$REF" "${COMMIT:-}" "$patches_hash"
+}
+INSTALL_STATE="$(install_state)"
+
+# Skip a pointless rebuild unless the user asks to reinstall. Both the
+# installed version and the full install state must match: a matching version
+# with a stale patch series still needs a rebuild. --dry-run always prints the
+# plan, even when the installed version matches.
 if (( ! FORCE && ! DRY_RUN )) && command -v passkey-tpm >/dev/null 2>&1; then
-	installed_version="$(passkey-tpm version 2>/dev/null | awk '{print $1}' || true)"
-	if [[ "$installed_version" == "$TARGET_VERSION" ]]; then
+	installed_version="$(passkey-tpm version 2>/dev/null | awk '{print $2}' || true)"
+	installed_state="$(cat "$INSTALL_STAMP" 2>/dev/null || true)"
+	if [[ "$installed_version" == "$TARGET_VERSION" ]] \
+		&& [[ "$installed_state" == "$INSTALL_STATE" ]]; then
 		log "passkey-tpm $installed_version is already installed; use --force to reinstall"
 		exit 0
 	fi
@@ -110,13 +138,6 @@ TREE_PATHS=(
 	/usr/share/licenses/passkey-tpm
 )
 
-patch_files() {
-	[[ -d "$PATCH_DIR" ]] || return 0
-	local patches=("$PATCH_DIR"/*.patch)
-	[[ -e "${patches[0]}" ]] || return 0
-	printf '%s\n' "${patches[@]}"
-}
-
 if (( DRY_RUN )); then
 	cat <<EOF
 
@@ -142,6 +163,7 @@ $(printf '  %s\n' "${BIN_FILES[@]}" "${CONF_FILES[@]}")
 Would refuse to start if any of their parent directories is not root-owned.
 Would verify afterwards that no shared system directory changed owner or mode.
 Would strip ACLs and verify no named ACL entries remain.
+Would record the pin and patch state in /usr/lib/passkey-tpm/install-state.
 Would run systemd-sysusers, modprobe uhid, udev/dbus/systemd reloads.
 Would enable and start passkey-tpm-agent for this user.
 EOF
@@ -261,8 +283,13 @@ log "Building release binaries"
 
 log "Staging FHS install tree (libexecdir=$LIBEXECDIR)"
 ( cd "$SRC" && cargo xtask dist --no-build --libexecdir "$LIBEXECDIR" )
-STAGE="$(find "$SRC/target/dist" -maxdepth 1 -type d -name 'passkey-tpm-*' | sort | tail -1)"
-[[ -n "$STAGE" ]] || { echo "staging tree not found" >&2; exit 1; }
+# cargo xtask dist names its tree after the checked-out workspace version, not
+# after the requested ref. Derive that exact path so a stale higher version
+# left by an earlier install (or a downgrade) cannot be selected.
+dist_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$SRC/Cargo.toml" | head -n 1)"
+[[ -n "$dist_version" ]] || die "could not read the workspace version from $SRC/Cargo.toml"
+STAGE="$SRC/target/dist/passkey-tpm-$dist_version"
+[[ -d "$STAGE/usr" ]] || die "staging tree not found: $STAGE"
 
 log "Stopping running services before replacing binaries"
 systemctl --user stop passkey-tpm-agent 2>/dev/null || true
@@ -333,6 +360,13 @@ for dest in "${BIN_FILES[@]}" "${CONF_FILES[@]}"; do
 	[[ -f "$dest" ]] || die "expected file was not installed: $dest"
 	[[ "$(stat -c '%u:%g' "$dest")" == "0:0" ]] || die "$dest is not root-owned"
 done
+
+# Record the pin and patch state used by this install only after the files have
+# been verified. It lives in the project's own tree, so uninstall.sh removes it
+# with the rest.
+printf '%s\n' "$INSTALL_STATE" | sudo tee "$INSTALL_STAMP" >/dev/null
+sudo chown root:root "$INSTALL_STAMP"
+sudo chmod 0644 "$INSTALL_STAMP"
 
 if command -v setfacl >/dev/null 2>&1; then
 	sudo setfacl -bR "${TREE_PATHS[@]}"
