@@ -122,6 +122,7 @@ BIN_FILES=(
 	/usr/lib/passkey-tpm/passkey-tpm-uvd
 )
 CONF_FILES=(
+	/etc/xdg/autostart/passkey-tpm-tray.desktop
 	/usr/lib/systemd/system/passkey-tpm-uvd.service
 	/usr/lib/systemd/user/passkey-tpm-agent.service
 	/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf
@@ -302,15 +303,31 @@ log "Installing files into / (sudo)"
 # Install one staged file at a time via `install`, which sets the owner, group
 # and mode of the file itself and never recurses. Then prove that no shared
 # system directory changed owner or mode.
+# cargo xtask dist also stages the tray's XDG autostart entry under etc/.
+# Install it from the same tree so the package and the uninstaller agree on
+# what the tray owns.
+STAGE_ROOTS=("$STAGE/usr")
+[[ -d "$STAGE/etc" ]] && STAGE_ROOTS+=("$STAGE/etc")
 STAGED_FILES=()
 while IFS= read -r -d '' staged; do
 	STAGED_FILES+=("${staged#"$STAGE"}")
-done < <(find "$STAGE/usr" -type f -print0 | sort -z)
-(( ${#STAGED_FILES[@]} > 0 )) || die "staging tree $STAGE/usr has no files"
+done < <(find "${STAGE_ROOTS[@]}" -type f -print0 | sort -z)
+(( ${#STAGED_FILES[@]} > 0 )) || die "staging tree $STAGE has no files"
+
+# Shared parents outside /usr must already exist and be root-owned. The tray
+# autostart directory is normally present on a desktop system; create it only
+# when missing, before the preflight snapshot, so the install never adopts or
+# re-modes an existing shared directory.
+for dest in "${STAGED_FILES[@]}"; do
+	[[ "$dest" == /usr/* ]] && continue
+	parent="$(dirname -- "$dest")"
+	if [[ ! -d "$parent" ]]; then
+		sudo install -d -o root -g root -m 0755 "$parent"
+	fi
+done
 
 # Everything outside the project's own trees goes into shared directories; those
-# are checked before and after the install. `/etc/**` from the stage is not
-# installed (unchanged behaviour).
+# are checked before and after the install.
 SHARED_DESTS=()
 for dest in "${STAGED_FILES[@]}"; do
 	for tree in "${TREE_PATHS[@]}"; do
