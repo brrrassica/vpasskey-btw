@@ -164,9 +164,9 @@ $(printf '  %s\n' "${BIN_FILES[@]}" "${CONF_FILES[@]}")
 Would refuse to start if any of their parent directories is not root-owned.
 Would verify afterwards that no shared system directory changed owner or mode.
 Would strip ACLs and verify no named ACL entries remain.
-Would record the pin and patch state in /usr/lib/passkey-tpm/install-state.
 Would run systemd-sysusers, modprobe uhid, udev/dbus/systemd reloads.
 Would enable and start passkey-tpm-agent for this user.
+Would record the pin and patch state in /usr/lib/passkey-tpm/install-state.
 EOF
 	exit 0
 fi
@@ -292,6 +292,11 @@ dist_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$SRC/Cargo.toml" | head -n
 STAGE="$SRC/target/dist/passkey-tpm-$dist_version"
 [[ -d "$STAGE/usr" ]] || die "staging tree not found: $STAGE"
 
+# Drop the old stamp before changing the installed tree. It is the fast-path
+# guard above, so keeping it through a failed install would make the retry
+# report "already installed" and skip the step that failed.
+sudo rm -f "$INSTALL_STAMP"
+
 log "Stopping running services before replacing binaries"
 systemctl --user stop passkey-tpm-agent 2>/dev/null || true
 sudo systemctl stop passkey-tpm-uvd 2>/dev/null || true
@@ -378,13 +383,6 @@ for dest in "${BIN_FILES[@]}" "${CONF_FILES[@]}"; do
 	[[ "$(stat -c '%u:%g' "$dest")" == "0:0" ]] || die "$dest is not root-owned"
 done
 
-# Record the pin and patch state used by this install only after the files have
-# been verified. It lives in the project's own tree, so uninstall.sh removes it
-# with the rest.
-printf '%s\n' "$INSTALL_STATE" | sudo tee "$INSTALL_STAMP" >/dev/null
-sudo chown root:root "$INSTALL_STAMP"
-sudo chmod 0644 "$INSTALL_STAMP"
-
 if command -v setfacl >/dev/null 2>&1; then
 	sudo setfacl -bR "${TREE_PATHS[@]}"
 	sudo setfacl -b -- "${STAGED_FILES[@]}"
@@ -413,6 +411,13 @@ sudo systemctl reload dbus.service
 log "Enabling per-user session agent"
 systemctl --user daemon-reload
 systemctl --user enable --now passkey-tpm-agent
+
+# Record the pin and patch state only after the ACL contract and the service
+# setup have succeeded, so a failure leaves no stamp for the retry fast path.
+# It lives in the project's own tree, so uninstall.sh removes it with the rest.
+printf '%s\n' "$INSTALL_STATE" | sudo tee "$INSTALL_STAMP" >/dev/null
+sudo chown root:root "$INSTALL_STAMP"
+sudo chmod 0644 "$INSTALL_STAMP"
 
 sleep 1
 log "Result"
