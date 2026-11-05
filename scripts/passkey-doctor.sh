@@ -324,7 +324,16 @@ fi
 
 if [[ -n "$OUTPUT_FILE" ]]; then
 	main 2>&1 | tee "$OUTPUT_FILE"
-	exit "${PIPESTATUS[0]}"
+	# Copy the array before any other command runs: reading PIPESTATUS in two
+	# separate statements resets it after the first assignment.
+	pipeline_status=("${PIPESTATUS[@]}")
+	status=${pipeline_status[0]}
+	tee_status=${pipeline_status[1]}
+	if (( tee_status != 0 )); then
+		printf '%s: cannot write %s\n' "$PROG" "$OUTPUT_FILE" >&2
+		exit 2
+	fi
+	exit "$status"
 fi
 
 main 2>&1

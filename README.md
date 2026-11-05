@@ -90,7 +90,7 @@ A step-by-step guide, including optional PIN setup and local testing, is in
 
 ## Status and compatibility
 
-`vpasskey-btw` 0.1.5-fix is a halfway development release on the way to 0.2.0.
+`vpasskey-btw` 0.1.6 is a halfway development release on the way to 0.2.0.
 It upgrades the pinned authenticator to `passkey-tpm v0.1.0-brrr1`, adds the
 polkit fingerprint
 prompt, retries, a configurable verification timeout, and safer installers. See
