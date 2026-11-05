@@ -225,10 +225,17 @@ if ! sudo -n true 2>/dev/null; then
 	printf '  sudo journalctl -u passkey-tpm-uvd -b -f\n'
 fi
 
+if (( DOCTOR_STATUS != 0 )); then
+	printf '\nEvidence incomplete: the doctor exited with status %s.\n' "$DOCTOR_STATUS" >&2
+	printf '  record: %s\n' "$RECORD" >&2
+	printf '  doctor: %s (missing or incomplete)\n' "$DOCTOR_OUT" >&2
+	exit "$DOCTOR_STATUS"
+fi
+
 printf '\nEvidence written:\n'
 printf '  %s\n' "$RECORD"
 printf '  %s\n' "$DOCTOR_OUT"
 printf '\nNext: add the DevTools options export and chrome://device-log excerpt, then fill\n'
 printf 'in the field summary and classification. See plans/compat/README.md.\n'
 
-exit "$DOCTOR_STATUS"
+exit 0

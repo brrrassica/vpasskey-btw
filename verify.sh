@@ -74,7 +74,11 @@ systemctl is-active passkey-tpm-uvd 2>/dev/null || true
 
 echo
 echo "== device =="
-fido2-token -L
+if command -v fido2-token >/dev/null 2>&1; then
+	fido2-token -L || true
+else
+	echo "(fido2-token not installed; install libfido2 for device diagnostics)"
+fi
 
 echo
 echo "== info =="
