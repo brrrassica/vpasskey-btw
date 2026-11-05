@@ -9,6 +9,25 @@ The tested browser and site status is not repeated here. See
 [plans/towards-0.2.0.md](plans/towards-0.2.0.md) for the release plan and open
 items.
 
+## [0.1.6] — 2026-11-05
+
+Patch release on top of 0.1.5-fix, carrying the develop fixes into the release
+line.
+
+### Fixed
+
+- `install.sh` records `/usr/lib/passkey-tpm/install-state` only after the ACL
+  verification and the user-service setup have succeeded, and drops an old stamp
+  before changing the installed tree. A failed install can no longer make the
+  retry fast path report "already installed" and skip the step that failed
+  ([#10](https://github.com/brrrassica/vpasskey-btw/issues/10)).
+- `verify.sh` guards the optional `fido2-token` probe, so a machine without
+  libfido2 reports the missing tool instead of aborting the whole preflight with
+  status 127 ([#11](https://github.com/brrrassica/vpasskey-btw/issues/11)).
+- `scripts/passkey-doctor.sh --output` propagates `tee` failures and exits
+  non-zero when the redacted report cannot be written
+  ([#12](https://github.com/brrrassica/vpasskey-btw/issues/12)).
+
 ## [0.1.5-fix] — 2026-11-04
 
 Installer reliability follow-up to 0.1.5.
