@@ -9,6 +9,22 @@ The tested browser and site status is not repeated here. See
 [plans/towards-0.2.0.md](plans/towards-0.2.0.md) for the release plan and open
 items.
 
+## [0.1.5-fix] — 2026-11-04
+
+Installer reliability follow-up to 0.1.5.
+
+### Fixed
+
+- `install.sh` no longer breaks on a pre-existing install that an earlier
+  privileged run left with root-owned `passkey-tpm/target/dist` (or `.git`)
+  files. The generated trees are reclaimed before building and staging.
+- Running the installer with `sudo` now re-executes it as the invoking user
+  instead of failing at `systemctl --user`, which has no session bus for root.
+  A bare root invocation without `SUDO_USER` fails with a clear message.
+- The final `passkey-tpm info` summary suppresses the expected libtss2
+  `/dev/tpmrm0: Permission denied` stderr noise, so a successful install no
+  longer looks like a failure. The device state is still reported.
+
 ## [0.1.5] — 2026-11-04
 
 A halfway release between 0.1.0 and 0.2.0, carrying the installer reliability

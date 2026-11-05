@@ -41,6 +41,21 @@ while (( $# > 0 )); do
 	shift
 done
 
+# This script must run as the invoking user: it builds and stages inside the
+# project checkout, and only individual privileged steps use sudo. A root run
+# both breaks the per-user systemd calls (root has no session bus) and leaves
+# root-owned files in the checkout, which makes the next normal run fail.
+# If it was started with sudo, drop back to the real user and continue.
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+	if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
+		log "Re-running as $SUDO_USER; do not invoke install.sh with sudo"
+		exec sudo -u "$SUDO_USER" -H \
+			--preserve-env=PASSKEY_TPM_REPO,PASSKEY_TPM_REF,PASSKEY_TPM_COMMIT \
+			-- "$0" "$@"
+	fi
+	die "run install.sh as your normal user; it invokes sudo for privileged steps"
+fi
+
 # Remember whether the caller overrode the pin, so a custom REF without a
 # custom COMMIT does not get checked against versions.env's commit.
 CUSTOM_REF=0
@@ -276,6 +291,25 @@ apply_patches() {
 	fi
 }
 
+# An earlier privilege-confused run (before the guard above) can leave
+# root-owned artifacts in the checkout. `target/dist` then makes staging fail
+# with EACCES for the invoking user, and root-owned `.git` objects break later
+# maintenance. Both are generated trees the project owns, so reclaim them
+# rather than refusing. The working tree itself stays protected by the dirty
+# checkout guard.
+reclaim_root_owned() {
+	local path owner
+	owner="$(id -u):$(id -g)"
+	for path in "$SRC/.git" "$SRC/target/dist"; do
+		[[ -e "$path" ]] || continue
+		if [[ -n "$(find "$path" ! -user "$(id -u)" -print -quit 2>/dev/null)" ]]; then
+			log "Reclaiming root-owned files under $path from an earlier privileged run"
+			sudo chown -R "$owner" "$path"
+		fi
+	done
+}
+
+reclaim_root_owned
 sync_source
 apply_patches
 
@@ -421,4 +455,8 @@ sudo chmod 0644 "$INSTALL_STAMP"
 
 sleep 1
 log "Result"
-passkey-tpm info || true
+# libtss2 writes a permission error to stderr on every unprivileged run because
+# only the broker user is meant to open the TPM. `info` already reports the
+# device state and points at `sudo passkey-tpm info` for details, so drop the
+# library noise: it made a successful install look broken.
+passkey-tpm info 2>/dev/null || true
