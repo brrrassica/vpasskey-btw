@@ -30,6 +30,24 @@ EOF
 log() { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# This script must run as the invoking user: it builds and stages inside the
+# project checkout, and only individual privileged steps use sudo. A root run
+# both breaks the per-user systemd calls (root has no session bus) and leaves
+# root-owned files in the checkout, which makes the next normal run fail.
+# If it was started with sudo, drop back to the real user and continue. Do this
+# before parsing options so the re-exec passes the original argv through;
+# parsing first would consume --dry-run/--force/--version and silently run a
+# normal install as the user.
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+	if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
+		log "Re-running as $SUDO_USER; do not invoke install.sh with sudo"
+		exec sudo -u "$SUDO_USER" -H \
+			--preserve-env=PASSKEY_TPM_REPO,PASSKEY_TPM_REF,PASSKEY_TPM_COMMIT \
+			-- "$0" "$@"
+	fi
+	die "run install.sh as your normal user; it invokes sudo for privileged steps"
+fi
+
 while (( $# > 0 )); do
 	case "$1" in
 		--dry-run) DRY_RUN=1 ;;
@@ -40,21 +58,6 @@ while (( $# > 0 )); do
 	esac
 	shift
 done
-
-# This script must run as the invoking user: it builds and stages inside the
-# project checkout, and only individual privileged steps use sudo. A root run
-# both breaks the per-user systemd calls (root has no session bus) and leaves
-# root-owned files in the checkout, which makes the next normal run fail.
-# If it was started with sudo, drop back to the real user and continue.
-if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-	if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
-		log "Re-running as $SUDO_USER; do not invoke install.sh with sudo"
-		exec sudo -u "$SUDO_USER" -H \
-			--preserve-env=PASSKEY_TPM_REPO,PASSKEY_TPM_REF,PASSKEY_TPM_COMMIT \
-			-- "$0" "$@"
-	fi
-	die "run install.sh as your normal user; it invokes sudo for privileged steps"
-fi
 
 # Remember whether the caller overrode the pin, so a custom REF without a
 # custom COMMIT does not get checked against versions.env's commit.
@@ -292,15 +295,15 @@ apply_patches() {
 }
 
 # An earlier privilege-confused run (before the guard above) can leave
-# root-owned artifacts in the checkout. `target/dist` then makes staging fail
-# with EACCES for the invoking user, and root-owned `.git` objects break later
-# maintenance. Both are generated trees the project owns, so reclaim them
-# rather than refusing. The working tree itself stays protected by the dirty
-# checkout guard.
+# root-owned artifacts in the checkout. The whole `target` tree then makes
+# cargo build and staging fail with EACCES for the invoking user, and root-owned
+# `.git` objects break later maintenance. Both are generated trees the project
+# owns, so reclaim them rather than refusing. The working tree itself stays
+# protected by the dirty checkout guard.
 reclaim_root_owned() {
 	local path owner
 	owner="$(id -u):$(id -g)"
-	for path in "$SRC/.git" "$SRC/target/dist"; do
+	for path in "$SRC/.git" "$SRC/target"; do
 		[[ -e "$path" ]] || continue
 		if [[ -n "$(find "$path" ! -user "$(id -u)" -print -quit 2>/dev/null)" ]]; then
 			log "Reclaiming root-owned files under $path from an earlier privileged run"
