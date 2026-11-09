@@ -24,6 +24,20 @@ EOF
 
 log() { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
 
+# This script must run as the invoking user so `systemctl --user` reaches that
+# user's session bus; only the privileged removal steps use sudo. A root run
+# would disable/stop the agent in root's nonexistent session and leave the
+# real user's agent enabled. If started with sudo, drop back to the real user
+# before doing any work, preserving the original argv.
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+	if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
+		log "Re-running as $SUDO_USER; do not invoke uninstall.sh with sudo"
+		exec sudo -u "$SUDO_USER" -H -- "$0" "$@"
+	fi
+	printf 'error: run uninstall.sh as your normal user; it invokes sudo for privileged steps\n' >&2
+	exit 1
+fi
+
 while (( $# > 0 )); do
 	case "$1" in
 		--purge) PURGE=1 ;;
@@ -84,7 +98,14 @@ ignore_missing() {
 }
 
 log "Stopping session agent"
-ignore_missing systemctl --user disable --now passkey-tpm-agent
+if ! systemctl --user disable --now passkey-tpm-agent 2>/dev/null; then
+	if (( FORCE )); then
+		printf 'warning: could not stop passkey-tpm-agent; continuing (--force)\n' >&2
+	elif [[ -e /usr/lib/systemd/user/passkey-tpm-agent.service ]]; then
+		printf 'error: could not stop passkey-tpm-agent for this user; retry with --force\n' >&2
+		exit 1
+	fi
+fi
 
 log "Stopping broker"
 ignore_missing sudo systemctl stop passkey-tpm-uvd
