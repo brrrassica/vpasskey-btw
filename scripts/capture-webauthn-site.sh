@@ -3,7 +3,8 @@
 #
 # Creates a record skeleton plus a redacted doctor/journal trace under
 # plans/compat/ so a Cloudflare or OpenRouter failure can be classified. It does
-# not drive the browser: the user performs the flow while the trace runs.
+# not drive the browser: the user performs the flow while the trace runs. The
+# capture protocol is documented in docs/capture-protocol.md.
 #
 # Usage:
 #   ./scripts/capture-webauthn-site.sh --site cloudflare --flow register
@@ -159,8 +160,29 @@ fi
 [[ -x "$DOCTOR" ]] || die "missing or not executable: $DOCTOR"
 mkdir -p "$OUTPUT_DIR" || die "cannot create $OUTPUT_DIR"
 
+printf '\nWhen the doctor prints "Start your passkey operation now", perform the\n'
+printf '%s %s flow in %s. Keep the tab focused until the trace window ends.\n\n' "$SITE" "$FLOW" "$BROWSER"
+
+"$DOCTOR" --trace "$TRACE_SECONDS" --output "$DOCTOR_OUT"
+DOCTOR_STATUS=$?
+
+if ! sudo -n true 2>/dev/null; then
+	printf '\nNote: the broker journal was not captured because passwordless sudo is\n'
+	printf 'unavailable. For broker-side evidence, run this in a second terminal during\n'
+	printf 'the next capture, then save and redact its output:\n'
+	printf '  sudo journalctl -u passkey-tpm-uvd -b -f\n'
+fi
+
+if (( DOCTOR_STATUS != 0 )); then
+	printf '\nEvidence incomplete: the doctor exited with status %s; no record was written.\n' "$DOCTOR_STATUS" >&2
+	printf '  doctor: %s (missing or incomplete)\n' "$DOCTOR_OUT" >&2
+	exit "$DOCTOR_STATUS"
+fi
+
+# The trace succeeded, so the record can truthfully claim "trace captured".
 # The backticks below are literal Markdown code spans, not command substitution.
 # shellcheck disable=SC2016
+REDACT_STATUS=0
 {
 	printf '# %s - %s capture\n\n' "$SITE" "$FLOW"
 	printf -- '- Status: trace captured, classification pending\n'
@@ -175,10 +197,13 @@ mkdir -p "$OUTPUT_DIR" || die "cannot create $OUTPUT_DIR"
 	printf -- '- Existing credential on this site: unknown\n\n'
 	printf '## Options as captured\n\n'
 	printf 'Source: DevTools WebAuthn panel export. Replace this section with the\n'
-	printf 'field summary from `plans/compat/README.md`.\n\n'
+	printf 'field summary from `docs/capture-protocol.md`.\n\n'
 	if [[ -n "$OPTIONS_FILE" ]]; then
 		printf '```json\n'
-		"$DOCTOR" --redact "$OPTIONS_FILE"
+		"$DOCTOR" --redact "$OPTIONS_FILE" || REDACT_STATUS=$?
+		if (( REDACT_STATUS != 0 )); then
+			printf '(redaction failed with status %s; options section is incomplete)\n' "$REDACT_STATUS"
+		fi
 		printf '```\n'
 	else
 		printf '```json\n{}\n```\n'
@@ -212,30 +237,16 @@ mkdir -p "$OUTPUT_DIR" || die "cannot create $OUTPUT_DIR"
 	printf -- '- `.doctor.txt`: %s\n' "$(basename "$DOCTOR_OUT")"
 } >"$RECORD" || die "cannot write $RECORD"
 
-printf '\nWhen the doctor prints "Start your passkey operation now", perform the\n'
-printf '%s %s flow in %s. Keep the tab focused until the trace window ends.\n\n' "$SITE" "$FLOW" "$BROWSER"
-
-"$DOCTOR" --trace "$TRACE_SECONDS" --output "$DOCTOR_OUT"
-DOCTOR_STATUS=$?
-
-if ! sudo -n true 2>/dev/null; then
-	printf '\nNote: the broker journal was not captured because passwordless sudo is\n'
-	printf 'unavailable. For broker-side evidence, run this in a second terminal during\n'
-	printf 'the next capture, then save and redact its output:\n'
-	printf '  sudo journalctl -u passkey-tpm-uvd -b -f\n'
-fi
-
-if (( DOCTOR_STATUS != 0 )); then
-	printf '\nEvidence incomplete: the doctor exited with status %s.\n' "$DOCTOR_STATUS" >&2
-	printf '  record: %s\n' "$RECORD" >&2
-	printf '  doctor: %s (missing or incomplete)\n' "$DOCTOR_OUT" >&2
-	exit "$DOCTOR_STATUS"
-fi
-
 printf '\nEvidence written:\n'
 printf '  %s\n' "$RECORD"
 printf '  %s\n' "$DOCTOR_OUT"
 printf '\nNext: add the DevTools options export and chrome://device-log excerpt, then fill\n'
-printf 'in the field summary and classification. See plans/compat/README.md.\n'
+printf 'in the field summary and classification. See docs/capture-protocol.md.\n'
+
+if (( REDACT_STATUS != 0 )); then
+	printf '\nEvidence incomplete: redacting %s failed with status %s; the\n' "$OPTIONS_FILE" "$REDACT_STATUS" >&2
+	printf 'options section in %s is marked incomplete.\n' "$RECORD" >&2
+	exit "$REDACT_STATUS"
+fi
 
 exit 0
