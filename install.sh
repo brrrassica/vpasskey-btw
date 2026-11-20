@@ -104,8 +104,13 @@ patch_files() {
 # The installed CLI reports only the upstream package version, so a pin that
 # stays on the same tag cannot tell us whether the local patch series changed.
 # Record the pin and a fingerprint of the patch contents with the install, and
-# use both when deciding whether a rebuild is needed.
+# use both when deciding whether a rebuild is needed. A custom REF without a
+# custom COMMIT is verified against nothing, so the resolved commit is added
+# after sync_source runs: without it, a mutable ref that moved (same crate
+# version, same patches) would produce a byte-identical stamp and silently
+# skip the rebuild.
 INSTALL_STAMP="/usr/lib/passkey-tpm/install-state"
+RESOLVED_COMMIT=""
 install_state() {
 	local patches_hash
 	patches_hash="$(
@@ -114,8 +119,8 @@ install_state() {
 			sha256sum < "$patch"
 		done < <(patch_files) | sha256sum | awk '{print $1}'
 	)"
-	printf 'wrapper=%s\nref=%s\ncommit=%s\npatches=%s\n' \
-		"$WRAPPER_VERSION" "$REF" "${COMMIT:-}" "$patches_hash"
+	printf 'wrapper=%s\nref=%s\ncommit=%s\nresolved=%s\npatches=%s\n' \
+		"$WRAPPER_VERSION" "$REF" "${COMMIT:-}" "$RESOLVED_COMMIT" "$patches_hash"
 }
 INSTALL_STATE="$(install_state)"
 
@@ -126,7 +131,11 @@ INSTALL_STATE="$(install_state)"
 if (( ! FORCE && ! DRY_RUN )) && command -v passkey-tpm >/dev/null 2>&1; then
 	installed_version="$(passkey-tpm version 2>/dev/null | awk '{print $2}' || true)"
 	installed_state="$(cat "$INSTALL_STAMP" 2>/dev/null || true)"
-	if [[ "$installed_version" == "$TARGET_VERSION" ]] \
+	# The pre-sync stamp can only be compared when COMMIT is pinned: with a
+	# custom ref the resolved commit is only known after sync_source, so a
+	# ref-only override must not take the fast path (its stamp field is still
+	# empty at this point).
+	if [[ -z "$CUSTOM_REF" ]] && [[ "$installed_version" == "$TARGET_VERSION" ]] \
 		&& [[ "$installed_state" == "$INSTALL_STATE" ]]; then
 		log "passkey-tpm $installed_version is already installed; use --force to reinstall"
 		exit 0
@@ -224,6 +233,11 @@ sync_source() {
 	local head
 	head="$(git -C "$SRC" rev-parse HEAD)"
 	[[ "$head" == "$resolved" ]] || die "checkout produced $head, expected $resolved"
+	# The stamp records what was actually built. A custom ref without a custom
+	# commit is verified against nothing, so without this a mutable ref that
+	# moved (same crate version, same patches) would produce a byte-identical
+	# stamp and the fast path would silently skip the rebuild.
+	RESOLVED_COMMIT="$resolved"
 	if [[ -n "$COMMIT" ]]; then
 		log "Verified source integrity: $COMMIT"
 	fi
@@ -454,6 +468,9 @@ systemctl --user enable --now passkey-tpm-agent
 # Record the pin and patch state only after the ACL contract and the service
 # setup have succeeded, so a failure leaves no stamp for the retry fast path.
 # It lives in the project's own tree, so uninstall.sh removes it with the rest.
+# Recompute here so the stamp carries the commit sync_source actually resolved;
+# the pre-sync value (RESOLVED_COMMIT still empty) is only a fast-path baseline.
+INSTALL_STATE="$(install_state)"
 printf '%s\n' "$INSTALL_STATE" | sudo tee "$INSTALL_STAMP" >/dev/null
 sudo chown root:root "$INSTALL_STAMP"
 sudo chmod 0644 "$INSTALL_STAMP"

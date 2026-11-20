@@ -64,15 +64,6 @@ if (( SHOW_VERSION )); then
 	exit 0
 fi
 
-# In dry-run mode, print each privileged command instead of running it.
-run() {
-	if (( DRY_RUN )); then
-		printf '  [dry-run] %s\n' "$*"
-	else
-		"$@"
-	fi
-}
-
 if (( DRY_RUN )); then
 	cat <<EOF
 
@@ -93,8 +84,10 @@ EOF
 	exit 0
 fi
 
-# A missing service is not an error: run on a partial install must still clean
-# up. --force additionally tolerates a broken/hung manager.
+# A missing service is not an error: a run on a partial install must still
+# clean up. Every stop runs through ignore_missing unconditionally: a missing
+# unit or a user session that is already gone must not abort an uninstall.
+# --force additionally tolerates a broken/hung manager.
 ignore_missing() {
 	"$@" 2>/dev/null || true
 }
@@ -113,24 +106,48 @@ log "Stopping broker"
 ignore_missing sudo systemctl stop passkey-tpm-uvd
 
 log "Removing installed files"
-sudo rm -rf /usr/lib/passkey-tpm
-sudo rm -f /usr/bin/passkey-tpm /usr/bin/passkey-tpm-tray
-sudo rm -f \
-	/etc/xdg/autostart/passkey-tpm-tray.desktop \
-	/usr/lib/systemd/system/passkey-tpm-uvd.service \
-	/usr/lib/systemd/user/passkey-tpm-agent.service \
-	/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf \
-	/usr/share/dbus-1/system-services/io.github.dangerousplay.PasskeyTpm1.service \
-	/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules \
-	/usr/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy \
-	/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules \
-	/usr/lib/modules-load.d/passkey-tpm.conf \
-	/usr/lib/sysusers.d/passkey-tpm.conf
-sudo rm -rf /usr/share/doc/passkey-tpm /usr/share/licenses/passkey-tpm
+# Without --force any failure aborts the script (set -e); --force is best
+# effort, as documented, so every removal failure is tolerated (and silenced,
+# like the stop commands) while the uninstall continues.
+if (( FORCE )); then
+	ignore_missing sudo rm -rf /usr/lib/passkey-tpm
+	ignore_missing sudo rm -f /usr/bin/passkey-tpm /usr/bin/passkey-tpm-tray
+	ignore_missing sudo rm -f \
+		/etc/xdg/autostart/passkey-tpm-tray.desktop \
+		/usr/lib/systemd/system/passkey-tpm-uvd.service \
+		/usr/lib/systemd/user/passkey-tpm-agent.service \
+		/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf \
+		/usr/share/dbus-1/system-services/io.github.dangerousplay.PasskeyTpm1.service \
+		/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules \
+		/usr/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy \
+		/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules \
+		/usr/lib/modules-load.d/passkey-tpm.conf \
+		/usr/lib/sysusers.d/passkey-tpm.conf
+	ignore_missing sudo rm -rf /usr/share/doc/passkey-tpm /usr/share/licenses/passkey-tpm
+else
+	sudo rm -rf /usr/lib/passkey-tpm
+	sudo rm -f /usr/bin/passkey-tpm /usr/bin/passkey-tpm-tray
+	sudo rm -f \
+		/etc/xdg/autostart/passkey-tpm-tray.desktop \
+		/usr/lib/systemd/system/passkey-tpm-uvd.service \
+		/usr/lib/systemd/user/passkey-tpm-agent.service \
+		/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf \
+		/usr/share/dbus-1/system-services/io.github.dangerousplay.PasskeyTpm1.service \
+		/usr/share/polkit-1/rules.d/50-passkey-tpm-fprintd.rules \
+		/usr/share/polkit-1/actions/io.github.dangerousplay.PasskeyTpm1.policy \
+		/usr/lib/udev/rules.d/70-passkey-tpm-uhid.rules \
+		/usr/lib/modules-load.d/passkey-tpm.conf \
+		/usr/lib/sysusers.d/passkey-tpm.conf
+	sudo rm -rf /usr/share/doc/passkey-tpm /usr/share/licenses/passkey-tpm
+fi
 
 if [[ "$PURGE" == "1" ]]; then
 	log "Purging credentials and broker user"
-	sudo rm -rf /var/lib/passkey-tpm
+	if (( FORCE )); then
+		ignore_missing sudo rm -rf /var/lib/passkey-tpm
+	else
+		sudo rm -rf /var/lib/passkey-tpm
+	fi
 	sudo userdel passkey-tpm 2>/dev/null || true
 	sudo groupdel passkey-tpm 2>/dev/null || true
 fi
