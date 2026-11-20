@@ -48,7 +48,7 @@ case "${1:-}" in
 		;;
 	--prompt)
 		echo "== prompt backend =="
-		prompt_probe
+		prompt_probe || exit 1
 		exit 0
 		;;
 	--compat)

@@ -37,13 +37,15 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 # If it was started with sudo, drop back to the real user and continue. Do this
 # before parsing options so the re-exec passes the original argv through;
 # parsing first would consume --dry-run/--force/--version and silently run a
-# normal install as the user.
+# normal install as the user. Option parsing shifts them off "$#", so forward
+# the untouched snapshot instead of "$@".
+ORIG_ARGS=("$@")
 if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
 	if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
 		log "Re-running as $SUDO_USER; do not invoke install.sh with sudo"
 		exec sudo -u "$SUDO_USER" -H \
 			--preserve-env=PASSKEY_TPM_REPO,PASSKEY_TPM_REF,PASSKEY_TPM_COMMIT \
-			-- "$0" "$@"
+			-- "$0" "${ORIG_ARGS[@]}"
 	fi
 	die "run install.sh as your normal user; it invokes sudo for privileged steps"
 fi
