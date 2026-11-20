@@ -28,11 +28,13 @@ log() { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
 # user's session bus; only the privileged removal steps use sudo. A root run
 # would disable/stop the agent in root's nonexistent session and leave the
 # real user's agent enabled. If started with sudo, drop back to the real user
-# before doing any work, preserving the original argv.
+# before doing any work, preserving the original argv. Option parsing shifts
+# them off "$#", so forward the untouched snapshot instead of "$@".
+ORIG_ARGS=("$@")
 if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
 	if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
 		log "Re-running as $SUDO_USER; do not invoke uninstall.sh with sudo"
-		exec sudo -u "$SUDO_USER" -H -- "$0" "$@"
+		exec sudo -u "$SUDO_USER" -H -- "$0" "${ORIG_ARGS[@]}"
 	fi
 	printf 'error: run uninstall.sh as your normal user; it invokes sudo for privileged steps\n' >&2
 	exit 1
