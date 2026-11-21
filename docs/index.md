@@ -41,6 +41,7 @@ with `./verify.sh --prompt`.
 - [Usage](USAGE.md) — registering, signing in, PINs, managing passkeys.
 - [How it works](HOW-IT-WORKS.md) — architecture and security model.
 - [Compatibility](COMPATIBILITY.md) — tested browsers and sites, known limits.
+- [Capture protocol](CAPTURE-PROTOCOL.md) — real-site evidence records.
 - [Troubleshooting](TROUBLESHOOTING.md) — diagnosing and fixing problems.
 - [Credits](CREDITS.md) — upstream projects and licenses.
 
