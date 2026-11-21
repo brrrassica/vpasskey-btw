@@ -4,7 +4,7 @@
 # Creates a record skeleton plus a redacted doctor/journal trace under
 # plans/compat/ so a Cloudflare or OpenRouter failure can be classified. It does
 # not drive the browser: the user performs the flow while the trace runs. The
-# capture protocol is documented in docs/capture-protocol.md.
+# capture protocol is documented in docs/CAPTURE-PROTOCOL.md.
 #
 # Usage:
 #   ./scripts/capture-webauthn-site.sh --site cloudflare --flow register
@@ -188,7 +188,7 @@ REDACT_STATUS=0
 	printf -- '- Status: trace captured, classification pending\n'
 	printf -- '- Captured (UTC): %s\n' "$STAMP"
 	printf -- '- Machine / OS: %s\n' "$(uname -srm 2>&1)"
-	printf -- '- Hostname: %s\n' "$(hostname 2>/dev/null || printf '<unknown>')"
+	printf -- '- Hostname: (omitted; do not publish identifying hostnames)\n'
 	printf -- '- Session: XDG_SESSION_TYPE=%s XDG_CURRENT_DESKTOP=%s\n' \
 		"${XDG_SESSION_TYPE:-<unset>}" "${XDG_CURRENT_DESKTOP:-<unset>}"
 	printf -- '- Browser and version: %s (%s)\n' "$BROWSER" "$(browser_version "$BROWSER")"
@@ -197,7 +197,7 @@ REDACT_STATUS=0
 	printf -- '- Existing credential on this site: unknown\n\n'
 	printf '## Options as captured\n\n'
 	printf 'Source: DevTools WebAuthn panel export. Replace this section with the\n'
-	printf 'field summary from `docs/capture-protocol.md`.\n\n'
+	printf 'field summary from `docs/CAPTURE-PROTOCOL.md`.\n\n'
 	if [[ -n "$OPTIONS_FILE" ]]; then
 		printf '```json\n'
 		"$DOCTOR" --redact "$OPTIONS_FILE" || REDACT_STATUS=$?
@@ -241,7 +241,7 @@ printf '\nEvidence written:\n'
 printf '  %s\n' "$RECORD"
 printf '  %s\n' "$DOCTOR_OUT"
 printf '\nNext: add the DevTools options export and chrome://device-log excerpt, then fill\n'
-printf 'in the field summary and classification. See docs/capture-protocol.md.\n'
+printf 'in the field summary and classification. See docs/CAPTURE-PROTOCOL.md.\n'
 
 if (( REDACT_STATUS != 0 )); then
 	printf '\nEvidence incomplete: redacting %s failed with status %s; the\n' "$OPTIONS_FILE" "$REDACT_STATUS" >&2

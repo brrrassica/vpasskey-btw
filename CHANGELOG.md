@@ -5,9 +5,9 @@ All notable changes to `vpasskey-btw` are recorded here. This project follows
 authenticator has its own version.
 
 The tested browser and site status is not repeated here. See
-[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the current matrix and
-[plans/towards-0.2.0.md](plans/towards-0.2.0.md) for the release plan and open
-items.
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the current matrix and the
+[open issues](https://github.com/brrrassica/vpasskey-btw/issues) for planned
+work.
 
 ## [Unreleased]
 
@@ -23,8 +23,27 @@ items.
   `Presence`, and empty allowLists remain discoverable. Tokenless silent probes
   now return `NO_CREDENTIALS`, matching upstream's fail-closed semantics.
 - All seven patch markers are present in the fork tag, so the default install
-  skips the archived patch series. The nested checkout now uses the fork as
-  `origin` and preserves upstream as `upstream`.
+  skips the archived patch series.
+
+### Fixed
+
+- Restored the installer's "already installed" fast path. It had been
+  unreachable because a numeric flag was tested as a string and the pre-sync
+  stamp had an empty resolved commit; it now also requires the wrapper's own
+  `/usr/bin/passkey-tpm` and stamp before skipping a rebuild.
+- Rejected untracked files in the nested checkout, dropped the install stamp
+  before build/staging, and used `cargo build --release --locked` so a stale
+  lockfile cannot dirty the tree or change dependency resolution.
+- Checked every ancestor directory before installing into it and before
+  creating missing parents, so an untrusted `/etc/xdg`-style chain can no
+  longer be adopted. ACL verification now also catches default ACL entries.
+- Made `uhid`, udev trigger, and D-Bus reload failures non-fatal warnings; made
+  `--purge` report user/group deletion failures unless `--force` is used.
+- Corrected `uninstall.sh --dry-run --force`, stale documentation links, the
+  capture-script protocol path/casing, omitted hostnames from capture records,
+  and the `verify.sh --bio` guard against a checkout/installed-version mismatch.
+- Added `scripts/check-repo.sh` and a CI workflow for shell syntax, ShellCheck,
+  offline CLI smoke tests, Markdown links, and pin/docs consistency.
 
 ## [0.1.6] — 2026-11-05
 

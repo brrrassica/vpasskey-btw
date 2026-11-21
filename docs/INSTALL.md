@@ -31,8 +31,9 @@ cd vpasskey-btw
 
 The installer will:
 
-1. Fetch the upstream authenticator (`passkey-tpm`) from `versions.env`, verify
-   that the ref resolves to the pinned commit, and check out that exact commit.
+1. Fetch the pinned authenticator source (`passkey-tpm`) from `versions.env`,
+   verify that the ref resolves to the pinned commit, and check out that exact
+   commit.
 2. Check the local patch markers in `patches/`. They are all present in the
    pinned fork tag, so nothing is applied on a default install.
 3. Build it with Cargo.
@@ -49,9 +50,10 @@ wrapper's `versions.env` as the source of truth rather than editing
 `PASSKEY_TPM_COMMIT` can override the pin; a custom ref without a matching
 commit disables the SHA check.
 
-It is safe to run again — for example after a `git pull` — to rebuild and
-reinstall. A dirty `passkey-tpm/` checkout is a hard error; `--force` reinstalls
-a matching version but does not discard local changes.
+It is safe to run again — for example after a `git pull`. An unchanged pinned
+install is skipped; `--force` rebuilds and reinstalls it. A dirty
+`passkey-tpm/` checkout, including untracked files, is a hard error and is
+never discarded.
 
 ## Confirm it worked
 

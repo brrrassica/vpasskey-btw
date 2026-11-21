@@ -5,7 +5,9 @@
 - Omarchy 4.0.6 on Arch Linux, Hyprland 0.56.2 (Wayland).
 - Lenovo ThinkPad E14 Gen 4, TPM 2.0, Goodix 550A fingerprint reader.
 - Chrome 156 and Chromium 156 (native Arch packages).
-- `passkey-tpm` 0.1.0-brrr1, installed by this project.
+- `passkey-tpm` 0.1.0-brrr1 when the matrix below was last exercised. The
+  current pin is `0.1.0-brrr2`, which adds the Firefox `allowList` and
+  stale-prompt fix but has not been re-run through this full matrix.
 
 ## Site matrix
 

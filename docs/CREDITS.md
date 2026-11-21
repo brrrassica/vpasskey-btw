@@ -17,8 +17,11 @@ Henrique ([@dangerousplay](https://github.com/dangerousplay))**.
   `v0.1.0-brrr2` (`d8acb31`). That tag carries the local patch series and a
   cherry-pick of upstream's Firefox `allowList`/stale-prompt fix.
 
-If you find a bug in the passkey behaviour itself, it most likely belongs
-upstream.
+Report bugs in the pinned fork against
+[`brrrassica/passkey-tpm`](https://github.com/brrrassica/passkey-tpm/issues);
+report problems that also reproduce with the
+[`dangerousplay` upstream](https://github.com/dangerousplay/passkey-tpm/issues)
+there.
 
 ## Local patches
 
@@ -31,9 +34,13 @@ because the pin already contains them:
 | [`0001`](../patches/0001-0.2.0-retries-timeouts-prompt-foundation.patch) | fingerprint retry loop, configurable UV timeout, broker-timeout alignment, and the agent prompt backend selector |
 | [`0002`](../patches/0002-0.2.0-getinfo-advertisement-audit.patch) | `getInfo` advertisement audit: derived `firmwareVersion`, `uvModality`, enforced limit aliases, and a regression test |
 | [`0003`](../patches/0003-0.2.0-polkit-fingerprint-prompt.patch) | polkit fingerprint prompt driven by the broker, with direct `fprintd` as the fallback |
+| [`0004`](../patches/0004-0.2.0-credprotect-enforcement.patch) | `credProtect` policy enforcement and matching regression coverage |
+| [`0005`](../patches/0005-0.2.0-resident-key-coverage.patch) | resident-key metadata coverage and empty-`allowList` discoverability |
+| [`0006`](../patches/0006-0.2.0-hmac-secret-coverage.patch) | end-to-end `hmac-secret` extension coverage |
+| [`0007`](../patches/0007-0.2.0-uv-pin-status-coverage.patch) | UV/PIN capability and status-code coverage |
 
 The wrapper's installer, scripts, test pages, and documentation are original to
-this project. Patches 0001–0003 remain under the upstream MIT OR Apache-2.0
+this project. All seven patches remain under the upstream MIT OR Apache-2.0
 terms because they modify upstream code.
 
 ## Lineage of the idea

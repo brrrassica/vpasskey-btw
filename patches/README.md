@@ -15,7 +15,7 @@ is present and `install.sh` skips all seven patches on the default pin. The
 files are kept as the reference series for the earlier upstream pin; a custom
 pin that lacks a marker still needs matching, refreshed patches. The pin itself
 keeps its SHA integrity check. When you add a patch, add its marker check to the
-`patch_marker` function in [`install.sh`](../install.sh:252) and list it here.
+`patch_marker` function in [`install.sh`](../install.sh) and list it here.
 
 The earlier series was refreshed against upstream `83e689c`. Conflicts were
 resolved in favor of local patch behavior, with the code adapted to the new

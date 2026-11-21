@@ -72,7 +72,7 @@ if (( DRY_RUN )); then
 wrapper: vpasskey-btw $WRAPPER_VERSION
 purge:   $([[ "$PURGE" == "1" ]] && echo yes || echo no)
 
-Would stop and disable passkey-tpm-agent and passkey-tpm-uvd.
+Would stop and disable passkey-tpm-agent, and stop passkey-tpm-uvd.
 Would remove /usr/lib/passkey-tpm, /usr/bin/passkey-tpm,
 /usr/bin/passkey-tpm-tray, /etc/xdg/autostart/passkey-tpm-tray.desktop, and
 the installed systemd, D-Bus, polkit, udev, sysusers, and modules-load files.
@@ -152,8 +152,18 @@ if [[ "$PURGE" == "1" ]]; then
 	else
 		sudo rm -rf /var/lib/passkey-tpm
 	fi
-	sudo userdel passkey-tpm 2>/dev/null || true
-	sudo groupdel passkey-tpm 2>/dev/null || true
+	if id -u passkey-tpm >/dev/null 2>&1; then
+		if ! sudo userdel passkey-tpm; then
+			printf 'warning: could not delete passkey-tpm user\n' >&2
+			(( FORCE )) || { printf 'error: retry with --force to continue\n' >&2; exit 1; }
+		fi
+	fi
+	if getent group passkey-tpm >/dev/null 2>&1; then
+		if ! sudo groupdel passkey-tpm; then
+			printf 'warning: could not delete passkey-tpm group\n' >&2
+			(( FORCE )) || { printf 'error: retry with --force to continue\n' >&2; exit 1; }
+		fi
+	fi
 fi
 
 if (( FORCE )); then
