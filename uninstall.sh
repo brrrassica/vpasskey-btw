@@ -80,7 +80,11 @@ EOF
 	if (( PURGE )); then
 		echo "Would purge /var/lib/passkey-tpm and the passkey-tpm user/group."
 	fi
-	echo "Would reload systemd, udev, and D-Bus."
+	if (( FORCE )); then
+		echo "Would skip daemon reloads (--force)."
+	else
+		echo "Would reload systemd, udev, and D-Bus."
+	fi
 	exit 0
 fi
 
