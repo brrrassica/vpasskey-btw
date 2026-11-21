@@ -1,5 +1,5 @@
 diff --git a/crates/core/src/ctap2/make_credential.rs b/crates/core/src/ctap2/make_credential.rs
-index f8e6cc2..db5edeb 100644
+index e7350e2..cd63d20 100644
 --- a/crates/core/src/ctap2/make_credential.rs
 +++ b/crates/core/src/ctap2/make_credential.rs
 @@ -79,7 +79,10 @@ impl<T: TpmOps> Authenticator<T> {
@@ -31,10 +31,10 @@ index f8e6cc2..db5edeb 100644
  
          let param = opt_bytes(get(&req, 8))?;
 diff --git a/crates/core/src/ctap2/tests.rs b/crates/core/src/ctap2/tests.rs
-index 1c3ebbe..34e59b6 100644
+index 03c508a..097b046 100644
 --- a/crates/core/src/ctap2/tests.rs
 +++ b/crates/core/src/ctap2/tests.rs
-@@ -1297,6 +1297,171 @@ fn same_user_and_rp_replaces_the_discoverable_credential() {
+@@ -1392,6 +1392,171 @@ fn same_user_and_rp_replaces_the_discoverable_credential() {
      assert_eq!(entries[0].credential_id, second);
  }
  

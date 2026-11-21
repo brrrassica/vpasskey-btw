@@ -22,13 +22,33 @@ usage: install.sh [--dry-run] [--force] [--version] [--help]
   --dry-run   Print what would be done; touch nothing and run no sudo/build.
   --force     Reinstall even if the installed version already matches the pin.
               A dirty passkey-tpm/ checkout is still fatal.
-  --version   Print the wrapper version and the upstream pin, then exit.
+  --version   Print the wrapper version and the pinned authenticator, then exit.
   --help      Show this help.
 EOF
 }
 
 log() { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# This script must run as the invoking user: it builds and stages inside the
+# project checkout, and only individual privileged steps use sudo. A root run
+# both breaks the per-user systemd calls (root has no session bus) and leaves
+# root-owned files in the checkout, which makes the next normal run fail.
+# If it was started with sudo, drop back to the real user and continue. Do this
+# before parsing options so the re-exec passes the original argv through;
+# parsing first would consume --dry-run/--force/--version and silently run a
+# normal install as the user. Option parsing shifts them off "$#", so forward
+# the untouched snapshot instead of "$@".
+ORIG_ARGS=("$@")
+if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+	if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
+		log "Re-running as $SUDO_USER; do not invoke install.sh with sudo"
+		exec sudo -u "$SUDO_USER" -H \
+			--preserve-env=PASSKEY_TPM_REPO,PASSKEY_TPM_REF,PASSKEY_TPM_COMMIT \
+			-- "$0" "${ORIG_ARGS[@]}"
+	fi
+	die "run install.sh as your normal user; it invokes sudo for privileged steps"
+fi
 
 while (( $# > 0 )); do
 	case "$1" in
@@ -40,21 +60,6 @@ while (( $# > 0 )); do
 	esac
 	shift
 done
-
-# This script must run as the invoking user: it builds and stages inside the
-# project checkout, and only individual privileged steps use sudo. A root run
-# both breaks the per-user systemd calls (root has no session bus) and leaves
-# root-owned files in the checkout, which makes the next normal run fail.
-# If it was started with sudo, drop back to the real user and continue.
-if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-	if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != root ]]; then
-		log "Re-running as $SUDO_USER; do not invoke install.sh with sudo"
-		exec sudo -u "$SUDO_USER" -H \
-			--preserve-env=PASSKEY_TPM_REPO,PASSKEY_TPM_REF,PASSKEY_TPM_COMMIT \
-			-- "$0" "$@"
-	fi
-	die "run install.sh as your normal user; it invokes sudo for privileged steps"
-fi
 
 # Remember whether the caller overrode the pin, so a custom REF without a
 # custom COMMIT does not get checked against versions.env's commit.
@@ -78,15 +83,21 @@ if (( CUSTOM_REF && ! CUSTOM_COMMIT )); then
 	COMMIT=""
 fi
 
+# When a commit is pinned, the pre-sync stamp can use it as the resolved
+# commit: sync_source verifies the fetched ref against exactly that value.
+# This lets the fast path compare like-for-like stamps; a ref-only override
+# leaves COMMIT empty and never takes the fast path.
+RESOLVED_COMMIT="$COMMIT"
+
 if (( SHOW_VERSION )); then
 	printf 'vpasskey-btw %s\n' "$WRAPPER_VERSION"
-	printf 'upstream: %s\n' "$REF"
+	printf 'authenticator: %s\n' "$REF"
 	printf 'commit:   %s\n' "${COMMIT:-<not verified>}"
 	exit 0
 fi
 
-# REF is normally a tag like v0.1.0-brrr1; strip the leading v for comparing
-# with `passkey-tpm version`.
+# REF is normally a version tag like v0.1.0-brrr2; strip the leading v for
+# comparing with `passkey-tpm version`.
 TARGET_VERSION="${REF#v}"
 
 patch_files() {
@@ -99,8 +110,13 @@ patch_files() {
 # The installed CLI reports only the upstream package version, so a pin that
 # stays on the same tag cannot tell us whether the local patch series changed.
 # Record the pin and a fingerprint of the patch contents with the install, and
-# use both when deciding whether a rebuild is needed.
-INSTALL_STAMP="/usr/lib/passkey-tpm/install-state"
+# use both when deciding whether a rebuild is needed. A custom REF without a
+# custom COMMIT is verified against nothing, so the resolved commit is added
+# after sync_source runs: without it, a mutable ref that moved (same crate
+# version, same patches) would produce a byte-identical stamp and silently
+# skip the rebuild.
+INSTALL_TREE="$LIBEXECDIR/passkey-tpm"
+INSTALL_STAMP="$INSTALL_TREE/install-state"
 install_state() {
 	local patches_hash
 	patches_hash="$(
@@ -109,17 +125,19 @@ install_state() {
 			sha256sum < "$patch"
 		done < <(patch_files) | sha256sum | awk '{print $1}'
 	)"
-	printf 'wrapper=%s\nref=%s\ncommit=%s\npatches=%s\n' \
-		"$WRAPPER_VERSION" "$REF" "${COMMIT:-}" "$patches_hash"
+	printf 'schema=2\nwrapper=%s\nref=%s\ncommit=%s\nresolved=%s\npatches=%s\n' \
+		"$WRAPPER_VERSION" "$REF" "${COMMIT:-}" "$RESOLVED_COMMIT" "$patches_hash"
 }
 INSTALL_STATE="$(install_state)"
 
 # Skip a pointless rebuild unless the user asks to reinstall. Both the
 # installed version and the full install state must match: a matching version
-# with a stale patch series still needs a rebuild. --dry-run always prints the
-# plan, even when the installed version matches.
-if (( ! FORCE && ! DRY_RUN )) && command -v passkey-tpm >/dev/null 2>&1; then
-	installed_version="$(passkey-tpm version 2>/dev/null | awk '{print $2}' || true)"
+# with a stale patch series still needs a rebuild. Only the binary this project
+# installs and its own stamp count; an unrelated passkey-tpm on PATH must not
+# suppress the system install. --dry-run always prints the plan.
+if (( ! FORCE && ! DRY_RUN )) && [[ -n "$COMMIT" ]] \
+	&& [[ -x /usr/bin/passkey-tpm ]] && [[ -f "$INSTALL_STAMP" ]]; then
+	installed_version="$(/usr/bin/passkey-tpm version 2>/dev/null | awk '{print $2}' || true)"
 	installed_state="$(cat "$INSTALL_STAMP" 2>/dev/null || true)"
 	if [[ "$installed_version" == "$TARGET_VERSION" ]] \
 		&& [[ "$installed_state" == "$INSTALL_STATE" ]]; then
@@ -160,8 +178,8 @@ if (( DRY_RUN )); then
 ==> Dry run: no changes will be made
 
 wrapper:          vpasskey-btw $WRAPPER_VERSION
-upstream repo:    $REPO_URL
-upstream ref:     $REF
+authenticator:    $REPO_URL
+pin:              $REF
 expected commit:  ${COMMIT:-<not verified>}
 source checkout:  $SRC
 libexecdir:       $LIBEXECDIR
@@ -200,8 +218,10 @@ sync_source() {
 		if [[ "$origin_url" != "$REPO_URL" ]]; then
 			die "existing checkout $SRC tracks '${origin_url:-<none>}', expected '$REPO_URL'. Remove it or set PASSKEY_TPM_REPO."
 		fi
-		if ! git -C "$SRC" diff --quiet || ! git -C "$SRC" diff --cached --quiet; then
-			die "$SRC has local changes; commit or stash them before installing."
+		# A clean `git diff` still allows untracked files, which apply_patches
+		# would otherwise sweep into its local commit with `git add -A`.
+		if [[ -n "$(git -C "$SRC" status --porcelain --untracked-files=all)" ]]; then
+			die "$SRC has local or untracked changes; commit, stash, or remove them before installing."
 		fi
 	fi
 
@@ -219,6 +239,11 @@ sync_source() {
 	local head
 	head="$(git -C "$SRC" rev-parse HEAD)"
 	[[ "$head" == "$resolved" ]] || die "checkout produced $head, expected $resolved"
+	# The stamp records what was actually built. A custom ref without a custom
+	# commit is verified against nothing, so without this a mutable ref that
+	# moved (same crate version, same patches) would produce a byte-identical
+	# stamp and the fast path would silently skip the rebuild.
+	RESOLVED_COMMIT="$resolved"
 	if [[ -n "$COMMIT" ]]; then
 		log "Verified source integrity: $COMMIT"
 	fi
@@ -233,13 +258,15 @@ sync_source() {
 patch_marker() {
 	case "$(basename "$1")" in
 		0001-*)
-			[[ -e "$SRC/crates/agent/src/prompt.rs" ]]
+			[[ -e "$SRC/crates/agent/src/prompt.rs" ]] \
+				&& grep -q 'DEFAULT_UV_TIMEOUT_SECS' "$SRC/crates/agent/src/main.rs"
 			;;
 		0002-*)
 			grep -q 'uvModality' "$SRC/crates/core/src/ctap2/info.rs"
 			;;
 		0003-*)
-			[[ -e "$SRC/crates/uv/src/polkit.rs" ]]
+			[[ -e "$SRC/crates/uv/src/polkit.rs" ]] \
+				&& grep -q 'io.github.dangerousplay.PasskeyTpm1.verify' "$SRC/crates/uv/src/polkit.rs"
 			;;
 		0004-*)
 			grep -q 'enforceCredentialProtectionPolicy' \
@@ -292,17 +319,17 @@ apply_patches() {
 }
 
 # An earlier privilege-confused run (before the guard above) can leave
-# root-owned artifacts in the checkout. `target/dist` then makes staging fail
-# with EACCES for the invoking user, and root-owned `.git` objects break later
-# maintenance. Both are generated trees the project owns, so reclaim them
-# rather than refusing. The working tree itself stays protected by the dirty
-# checkout guard.
+# root-owned artifacts in the checkout. The whole `target` tree then makes
+# cargo build and staging fail with EACCES for the invoking user, and root-owned
+# `.git` objects break later maintenance. Both are generated trees the project
+# owns, so reclaim them rather than refusing. The working tree itself stays
+# protected by the dirty checkout guard.
 reclaim_root_owned() {
 	local path owner
 	owner="$(id -u):$(id -g)"
-	for path in "$SRC/.git" "$SRC/target/dist"; do
+	for path in "$SRC/.git" "$SRC/target"; do
 		[[ -e "$path" ]] || continue
-		if [[ -n "$(find "$path" ! -user "$(id -u)" -print -quit 2>/dev/null)" ]]; then
+		if [[ -n "$(find "$path" -user 0 -print -quit 2>/dev/null)" ]]; then
 			log "Reclaiming root-owned files under $path from an earlier privileged run"
 			sudo chown -R "$owner" "$path"
 		fi
@@ -313,8 +340,14 @@ reclaim_root_owned
 sync_source
 apply_patches
 
+# Drop the old stamp before doing work that can fail. It is the fast-path
+# guard, so keeping it through a failed build or install would make the retry
+# report "already installed" and skip the step that failed.
+sudo rm -f "$INSTALL_STAMP"
+
 log "Building release binaries"
-( cd "$SRC" && cargo build --release )
+# Keep dependency resolution pinned to Cargo.lock, as `cargo xtask dist` does.
+( cd "$SRC" && cargo build --release --locked )
 
 log "Staging FHS install tree (libexecdir=$LIBEXECDIR)"
 ( cd "$SRC" && cargo xtask dist --no-build --libexecdir "$LIBEXECDIR" )
@@ -325,11 +358,6 @@ dist_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$SRC/Cargo.toml" | head -n
 [[ -n "$dist_version" ]] || die "could not read the workspace version from $SRC/Cargo.toml"
 STAGE="$SRC/target/dist/passkey-tpm-$dist_version"
 [[ -d "$STAGE/usr" ]] || die "staging tree not found: $STAGE"
-
-# Drop the old stamp before changing the installed tree. It is the fast-path
-# guard above, so keeping it through a failed install would make the retry
-# report "already installed" and skip the step that failed.
-sudo rm -f "$INSTALL_STAMP"
 
 log "Stopping running services before replacing binaries"
 systemctl --user stop passkey-tpm-agent 2>/dev/null || true
@@ -353,16 +381,25 @@ while IFS= read -r -d '' staged; do
 done < <(find "${STAGE_ROOTS[@]}" -type f -print0 | sort -z)
 (( ${#STAGED_FILES[@]} > 0 )) || die "staging tree $STAGE has no files"
 
-# Shared parents outside /usr must already exist and be root-owned. The tray
-# autostart directory is normally present on a desktop system; create it only
-# when missing, before the preflight snapshot, so the install never adopts or
-# re-modes an existing shared directory.
+CHECK_TARGETS="$ROOT/scripts/check-install-targets.sh"
+[[ -x "$CHECK_TARGETS" ]] || die "missing $CHECK_TARGETS"
+
+# Never create a directory under an untrusted chain. Check the nearest existing
+# ancestor of each missing parent first; only then create the whole chain as
+# root-owned. This happens before the snapshot so the install still proves it
+# changed no existing shared directory.
 for dest in "${STAGED_FILES[@]}"; do
 	[[ "$dest" == /usr/* ]] && continue
 	parent="$(dirname -- "$dest")"
-	if [[ ! -d "$parent" ]]; then
-		sudo install -d -o root -g root -m 0755 "$parent"
+	[[ -d "$parent" ]] && continue
+	ancestor="$parent"
+	while [[ ! -d "$ancestor" && "$ancestor" != "/" ]]; do
+		ancestor="$(dirname -- "$ancestor")"
+	done
+	if ! "$CHECK_TARGETS" --quiet "$ancestor/.vpasskey-check"; then
+		die "refusing to create $parent under an untrusted directory: $ancestor"
 	fi
+	sudo install -d -o root -g root -m 0755 "$parent"
 done
 
 # Everything outside the project's own trees goes into shared directories; those
@@ -377,8 +414,6 @@ for dest in "${STAGED_FILES[@]}"; do
 	SHARED_DESTS+=("$dest")
 done
 
-CHECK_TARGETS="$ROOT/scripts/check-install-targets.sh"
-[[ -x "$CHECK_TARGETS" ]] || die "missing $CHECK_TARGETS"
 SNAPSHOT="$(mktemp)"
 trap 'rm -f "$SNAPSHOT"' EXIT
 if (( ${#SHARED_DESTS[@]} > 0 )); then
@@ -422,10 +457,10 @@ if command -v setfacl >/dev/null 2>&1; then
 	sudo setfacl -b -- "${STAGED_FILES[@]}"
 fi
 if command -v getfacl >/dev/null 2>&1; then
-	if sudo getfacl -pR "${TREE_PATHS[@]}" 2>/dev/null | grep -Eq '^user:[^:]+:'; then
+	if sudo getfacl -pR "${TREE_PATHS[@]}" 2>/dev/null | grep -Eq '^((default:)?user:[^:]+:)'; then
 		die "installed tree still carries a named ACL entry; refusing to continue"
 	fi
-	if sudo getfacl -p -- "${STAGED_FILES[@]}" 2>/dev/null | grep -Eq '^user:[^:]+:'; then
+	if sudo getfacl -p -- "${STAGED_FILES[@]}" 2>/dev/null | grep -Eq '^((default:)?user:[^:]+:)'; then
 		die "installed files still carry a named ACL entry; refusing to continue"
 	fi
 	log "Verified: installed files have no named ACL entries"
@@ -436,11 +471,16 @@ log "Creating broker user (passkey-tpm, member of tss)"
 sudo systemd-sysusers /usr/lib/sysusers.d/passkey-tpm.conf
 
 log "Loading uhid and reloading udev/dbus/systemd"
-sudo modprobe uhid
-sudo udevadm control --reload-rules
-sudo udevadm trigger --subsystem-match=misc --sysname-match=uhid
+# These are best-effort: uhid is often built in, udev's trigger can race a
+# device disappearing, and many dbus units have no ExecReload. A failure here
+# must not leave files replaced, services stopped, and no stamp written.
+sudo modprobe uhid 2>/dev/null || printf 'warning: could not load uhid (it may be built in)\n' >&2
+sudo udevadm control --reload-rules 2>/dev/null || printf 'warning: udev rule reload failed\n' >&2
+sudo udevadm trigger --subsystem-match=misc --sysname-match=uhid 2>/dev/null \
+	|| printf 'warning: udev trigger failed\n' >&2
 sudo systemctl daemon-reload
-sudo systemctl reload dbus.service
+sudo systemctl reload dbus.service 2>/dev/null \
+	|| printf 'warning: dbus reload failed or is unsupported\n' >&2
 
 log "Enabling per-user session agent"
 systemctl --user daemon-reload
@@ -449,6 +489,9 @@ systemctl --user enable --now passkey-tpm-agent
 # Record the pin and patch state only after the ACL contract and the service
 # setup have succeeded, so a failure leaves no stamp for the retry fast path.
 # It lives in the project's own tree, so uninstall.sh removes it with the rest.
+# Recompute here so the stamp carries the commit sync_source actually resolved;
+# the pre-sync value is only the fast-path baseline.
+INSTALL_STATE="$(install_state)"
 printf '%s\n' "$INSTALL_STATE" | sudo tee "$INSTALL_STAMP" >/dev/null
 sudo chown root:root "$INSTALL_STAMP"
 sudo chmod 0644 "$INSTALL_STAMP"

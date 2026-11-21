@@ -218,7 +218,7 @@ and journal trace — use the capture kit:
 ```
 
 The protocol and the fields to record are in
-[plans/compat/README.md](../plans/compat/README.md). The site flows need a real
+[capture-protocol.md](CAPTURE-PROTOCOL.md). The site flows need a real
 authenticated browser session and a physical fingerprint scan.
 
 ## Checking the compatibility matrix

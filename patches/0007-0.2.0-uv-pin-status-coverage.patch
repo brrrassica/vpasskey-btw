@@ -1,8 +1,40 @@
+diff --git a/crates/agent/src/main.rs b/crates/agent/src/main.rs
+index 119cd68..e70a342 100644
+--- a/crates/agent/src/main.rs
++++ b/crates/agent/src/main.rs
+@@ -325,7 +325,7 @@ fn open_device(
+ /// The polkit backend is rendered by the broker's `CheckAuthorization` in the desktop
+ /// agent; this process must stay quiet then, or the user sees the native card and a toast
+ /// for the same request. Native (M4.3) is not built yet and falls back to the notification.
+-fn prompt_user(backend: prompt::Backend, rp: String, notes: &std_mpsc::Sender<Note>) {
++fn prompt_user(backend: prompt::Backend, rp: String, notes: &mpsc::UnboundedSender<Note>) {
+     if passkey_tpm_uv::polkit::available() {
+         // The broker selected the desktop prompt; do not duplicate it.
+         return;
+@@ -352,7 +352,7 @@ fn apply(
+     writer: Option<&UhidWriter>,
+     bus: &Connection,
+     tx: &mpsc::UnboundedSender<Input>,
+-    notes: &std_mpsc::Sender<Note>,
++    notes: &mpsc::UnboundedSender<Note>,
+     backend: prompt::Backend,
+ ) {
+     for effect in effects {
+@@ -391,6 +391,9 @@ fn apply(
+                 });
+             }
+             Effect::Prompt(rp) => prompt_user(backend, rp, notes),
++            Effect::EndPrompt => {
++                let _ = notes.send(Note::Close);
++            }
+         }
+     }
+ }
 diff --git a/crates/core/src/ctap2/authn.rs b/crates/core/src/ctap2/authn.rs
-index 4cbb5c6..799f0c4 100644
+index 78b2864..f4ec15e 100644
 --- a/crates/core/src/ctap2/authn.rs
 +++ b/crates/core/src/ctap2/authn.rs
-@@ -174,6 +174,11 @@ impl<T: TpmOps> Authenticator<T> {
+@@ -184,6 +184,11 @@ impl<T: TpmOps> Authenticator<T> {
                  return error(match pending.kind {
                      PendingKind::TokenUsingUv(_) if blocked => status::UV_BLOCKED,
                      PendingKind::TokenUsingUv(_) => status::UV_INVALID,
@@ -15,13 +47,13 @@ index 4cbb5c6..799f0c4 100644
                  });
              }
 diff --git a/crates/core/src/ctap2/get_assertion.rs b/crates/core/src/ctap2/get_assertion.rs
-index 22fd49d..9b09a42 100644
+index e862e67..e5558b5 100644
 --- a/crates/core/src/ctap2/get_assertion.rs
 +++ b/crates/core/src/ctap2/get_assertion.rs
-@@ -46,6 +46,11 @@ impl<T: TpmOps> Authenticator<T> {
-             return Err(status::INVALID_OPTION);
-         }
-         let silent = option(&req, 5, "up")? == Some(false);
+@@ -50,6 +50,11 @@ impl<T: TpmOps> Authenticator<T> {
+         } else {
+             Presence::Required
+         };
 +        // Same mapping as makeCredential: `uv: true|absent|false` is
 +        // required|preferred|discouraged. UV is always verified (credProtect level 3), so
 +        // the option can never weaken the request, but it must still be well-typed
@@ -31,7 +63,7 @@ index 22fd49d..9b09a42 100644
  
          let param = opt_bytes(get(&req, 6))?;
 diff --git a/crates/core/src/ctap2/make_credential.rs b/crates/core/src/ctap2/make_credential.rs
-index db5edeb..0a3ae38 100644
+index cd63d20..3914f88 100644
 --- a/crates/core/src/ctap2/make_credential.rs
 +++ b/crates/core/src/ctap2/make_credential.rs
 @@ -76,6 +76,12 @@ impl<T: TpmOps> Authenticator<T> {
@@ -48,10 +80,19 @@ index db5edeb..0a3ae38 100644
          let rp_id_hash = RpIdHash(sha256(&[rp_id.as_bytes()]));
  
 diff --git a/crates/core/src/ctap2/tests.rs b/crates/core/src/ctap2/tests.rs
-index 5ae341e..8ffce6f 100644
+index 79c9d8e..ab3a563 100644
 --- a/crates/core/src/ctap2/tests.rs
 +++ b/crates/core/src/ctap2/tests.rs
-@@ -12,6 +12,8 @@ use super::{Authenticator, Step, UserInfo, UvOutcome};
+@@ -5,13 +5,15 @@ use passkey_tpm_wire::credid::KeyBlobs;
+ use proptest::prelude::*;
+ 
+ use super::common::{
+-    cmd, get, get_text, int, sha256, status, text, AAGUID, MAX_CREDENTIAL_COUNT_IN_LIST,
++    get, get_text, int, sha256, status, text, AAGUID, MAX_CREDENTIAL_COUNT_IN_LIST,
+     MAX_MSG_SIZE, MAX_UV_RETRIES,
+ };
+-use super::{Authenticator, Step, UserInfo, UvOutcome};
++use super::{Authenticator, Command, Step, UserInfo, UvOutcome};
  use crate::evidence::UvEvidence;
  use crate::gates::GateKind;
  use crate::pin_protocol::{parse_platform_key, KeyAgreement, Protocol, SharedSecret};
@@ -60,7 +101,43 @@ index 5ae341e..8ffce6f 100644
  use crate::tpm_iface::{CredBlobs, CredProtect, ResidentEntry, RpIdHash, TpmError, TpmOps, Uid};
  
  /// In-memory backend. Credential IDs are `uid ‖ rpIdHash ‖ counter ‖ hmac flag` and open
-@@ -1083,10 +1085,13 @@ fn failed_fingerprints_block_the_gesture_path() {
+@@ -461,7 +463,7 @@ fn get_info_advertises_ctap_2_1() {
+ #[test]
+ fn get_info_advertisement_matches_implemented_features() {
+     let mut a = auth();
+-    let info = body(&done(prep(&mut a, ALICE, &[cmd::GET_INFO])));
++    let info = body(&done(prep(&mut a, ALICE, &[Command::GetInfo.code()])));
+ 
+     // Members a platform may act on.
+     for key in [
+@@ -557,7 +559,7 @@ fn get_info_advertisement_matches_implemented_features() {
+ 
+     // A missing finger keeps `uv` present and turns it false; a missing PIN does the same for
+     // `clientPin`. Both mean "capable, not configured" (CTAP 2.1 §6.4), not "unsupported".
+-    let no_reader = body(&done(a.prepare(ALICE, NO_READER, &[cmd::GET_INFO], 1_000)));
++    let no_reader = body(&done(a.prepare(ALICE, NO_READER, &[Command::GetInfo.code()], 1_000)));
+     let opts = get(&no_reader, 4).unwrap();
+     assert_eq!(get_text(opts, "uv"), Some(&Value::Bool(false)));
+     assert_eq!(get_text(opts, "clientPin"), Some(&Value::Bool(false)));
+@@ -569,7 +571,7 @@ fn get_info_advertisement_matches_implemented_features() {
+         &mut a,
+         vec![(int(7), Value::Map(vec![(text("rk"), Value::Bool(true))]))],
+     );
+-    let info = body(&done(prep(&mut a, ALICE, &[cmd::GET_INFO])));
++    let info = body(&done(prep(&mut a, ALICE, &[Command::GetInfo.code()])));
+     assert_eq!(get(&info, 0x14), Some(&Value::Uint(63)));
+ 
+     let over_limit = u8::try_from(MAX_CREDENTIAL_COUNT_IN_LIST).unwrap();
+@@ -578,7 +580,7 @@ fn get_info_advertisement_matches_implemented_features() {
+         done(prep(
+             &mut a,
+             ALICE,
+-            &req(cmd::GET_ASSERTION, ga_params(Some(too_many), vec![]))
++            &req(Command::GetAssertion, ga_params(Some(too_many), vec![]))
+         )),
+         vec![status::LIMIT_EXCEEDED]
+     );
+@@ -1183,10 +1185,13 @@ fn failed_fingerprints_block_the_gesture_path() {
      for i in 0..MAX_UV_RETRIES {
          let request = if i % 2 == 0 { &mc } else { &ga };
          let p = need_uv(prep(&mut a, ALICE, request));
@@ -78,7 +155,7 @@ index 5ae341e..8ffce6f 100644
      }
      assert_eq!(done(prep(&mut a, ALICE, &mc)), vec![status::UV_BLOCKED]);
      assert_eq!(done(prep(&mut a, ALICE, &ga)), vec![status::UV_BLOCKED]);
-@@ -1167,6 +1172,257 @@ fn blocked_pin_blocks_the_gesture_path() {
+@@ -1267,6 +1272,257 @@ fn blocked_pin_blocks_the_gesture_path() {
      );
  }
  
@@ -99,7 +176,7 @@ index 5ae341e..8ffce6f 100644
 +    // same UV flag in the response.
 +    for uv in [Some(true), None, Some(false)] {
 +        let mut a = auth();
-+        let mc = req(cmd::MAKE_CREDENTIAL, mc_params(uv_option(7, uv)));
++        let mc = req(Command::MakeCredential, mc_params(uv_option(7, uv)));
 +        let step = prep(&mut a, ALICE, &mc);
 +        assert!(matches!(&step, Step::NeedUv(_)), "makeCredential uv={uv:?}");
 +        let resp = body(&touch(&mut a, ALICE, step));
@@ -108,7 +185,7 @@ index 5ae341e..8ffce6f 100644
 +        let id = cred_id_from_auth_data(auth_data);
 +
 +        let ga = req(
-+            cmd::GET_ASSERTION,
++            Command::GetAssertion,
 +            ga_params(Some(vec![descriptor(&id)]), uv_option(5, uv)),
 +        );
 +        let step = prep(&mut a, ALICE, &ga);
@@ -128,8 +205,8 @@ index 5ae341e..8ffce6f 100644
 +    // prompt whatever `uv` says — the option can only ask for more, never less.
 +    for uv in [Some(true), None, Some(false)] {
 +        let mut a = auth();
-+        let mc = req(cmd::MAKE_CREDENTIAL, mc_params(uv_option(7, uv)));
-+        let ga = req(cmd::GET_ASSERTION, ga_params(None, uv_option(5, uv)));
++        let mc = req(Command::MakeCredential, mc_params(uv_option(7, uv)));
++        let ga = req(Command::GetAssertion, ga_params(None, uv_option(5, uv)));
 +        assert_eq!(
 +            done(a.prepare(ALICE, NO_READER, &mc, 0)),
 +            vec![status::NOT_ALLOWED],
@@ -160,10 +237,10 @@ index 5ae341e..8ffce6f 100644
 +fn non_boolean_uv_option_is_cbor_unexpected_type() {
 +    // `uv` was type-checked nowhere before 0.2.0: the option map was parsed only for `up`
 +    // and `rk`, so `uv: 1` was silently accepted.
-+    for (command, key) in [(cmd::MAKE_CREDENTIAL, 7), (cmd::GET_ASSERTION, 5)] {
++    for (command, key) in [(Command::MakeCredential, 7), (Command::GetAssertion, 5)] {
 +        let mut a = auth();
 +        let bad = vec![(int(key), Value::Map(vec![(text("uv"), Value::Uint(1))]))];
-+        let request = if command == cmd::MAKE_CREDENTIAL {
++        let request = if command == Command::MakeCredential {
 +            req(command, mc_params(bad))
 +        } else {
 +            req(command, ga_params(None, bad))
@@ -171,7 +248,7 @@ index 5ae341e..8ffce6f 100644
 +        assert_eq!(
 +            done(prep(&mut a, ALICE, &request)),
 +            vec![status::CBOR_UNEXPECTED_TYPE],
-+            "command {command:#04x}"
++            "command {:#04x}", command.code()
 +        );
 +    }
 +}
@@ -336,3 +413,201 @@ index 5ae341e..8ffce6f 100644
  #[test]
  fn token_is_bound_to_its_rp_and_permissions_and_user() {
      let mut a = auth();
+@@ -1369,7 +1625,7 @@ fn discoverable_credentials_multiple_accounts_and_next_assertion() {
+         get_text(get(&resp, 1).unwrap(), "id"),
+         Some(&Value::Bytes(second.clone()))
+     );
+-    let next = body(&done(prep(&mut a, ALICE, &[cmd::GET_NEXT_ASSERTION])));
++    let next = body(&done(prep(&mut a, ALICE, &[Command::GetNextAssertion.code()])));
+     assert_eq!(
+         get_text(get(&next, 1).unwrap(), "id"),
+         Some(&Value::Bytes(first.clone()))
+@@ -1440,7 +1696,7 @@ fn resident_key_required_stores_metadata_and_empty_allow_list_is_discoverable()
+     let step = prep(
+         &mut a,
+         ALICE,
+-        &req(cmd::GET_ASSERTION, ga_params(Some(Vec::new()), Vec::new())),
++        &req(Command::GetAssertion, ga_params(Some(Vec::new()), Vec::new())),
+     );
+     let resp = body(&touch(&mut a, ALICE, step));
+     assert_eq!(
+@@ -1480,7 +1736,7 @@ fn non_resident_credentials_are_not_discoverable() {
+         let step = prep(
+             &mut a,
+             ALICE,
+-            &req(cmd::GET_ASSERTION, ga_params(Some(Vec::new()), Vec::new())),
++            &req(Command::GetAssertion, ga_params(Some(Vec::new()), Vec::new())),
+         );
+         assert_eq!(
+             touch(&mut a, ALICE, step),
+@@ -1492,7 +1748,7 @@ fn non_resident_credentials_are_not_discoverable() {
+             &mut a,
+             ALICE,
+             &req(
+-                cmd::GET_ASSERTION,
++                Command::GetAssertion,
+                 ga_params(Some(vec![descriptor(&id)]), Vec::new()),
+             ),
+         );
+@@ -1512,7 +1768,7 @@ fn resident_store_full_is_reported_without_creating_a_credential() {
+     let step = prep(
+         &mut a,
+         ALICE,
+-        &req(cmd::MAKE_CREDENTIAL, mc_params(vec![rk_option()])),
++        &req(Command::MakeCredential, mc_params(vec![rk_option()])),
+     );
+     let pending = need_uv(step);
+     assert_eq!(
+@@ -1559,7 +1815,7 @@ fn resident_metadata_survives_a_new_authenticator_instance() {
+     let step = prep(
+         &mut restarted,
+         ALICE,
+-        &req(cmd::GET_ASSERTION, ga_params(Some(Vec::new()), Vec::new())),
++        &req(Command::GetAssertion, ga_params(Some(Vec::new()), Vec::new())),
+     );
+     let resp = body(&touch(&mut restarted, ALICE, step));
+     assert_eq!(
+@@ -1598,7 +1854,7 @@ fn cred_protect_upgrades_every_requested_level_to_three() {
+         let step = prep(
+             &mut a,
+             ALICE,
+-            &req(cmd::MAKE_CREDENTIAL, mc_params(vec![(int(6), ext)])),
++            &req(Command::MakeCredential, mc_params(vec![(int(6), ext)])),
+         );
+         let resp = body(&touch(&mut a, ALICE, step));
+         assert_eq!(
+@@ -1621,7 +1877,7 @@ fn enforce_credential_protection_policy_needs_a_policy() {
+         done(prep(
+             &mut a,
+             ALICE,
+-            &req(cmd::MAKE_CREDENTIAL, mc_params(vec![(int(6), ext)])),
++            &req(Command::MakeCredential, mc_params(vec![(int(6), ext)])),
+         )),
+         vec![status::INVALID_OPTION],
+         "enforce=true without credProtect names nothing to enforce"
+@@ -1642,7 +1898,7 @@ fn enforce_credential_protection_policy_needs_a_policy() {
+             &mut a,
+             ALICE,
+             &req(
+-                cmd::MAKE_CREDENTIAL,
++                Command::MakeCredential,
+                 mc_params(vec![(int(6), Value::Map(ext))]),
+             ),
+         );
+@@ -1664,7 +1920,7 @@ fn cred_protect_extension_types_and_levels_are_validated() {
+             done(prep(
+                 &mut a,
+                 ALICE,
+-                &req(cmd::MAKE_CREDENTIAL, mc_params(vec![(int(6), ext)])),
++                &req(Command::MakeCredential, mc_params(vec![(int(6), ext)])),
+             )),
+             vec![status::INVALID_OPTION],
+             "credProtect {level} is out of range"
+@@ -1682,7 +1938,7 @@ fn cred_protect_extension_types_and_levels_are_validated() {
+             done(prep(
+                 &mut a,
+                 ALICE,
+-                &req(cmd::MAKE_CREDENTIAL, mc_params(vec![(int(6), ext)])),
++                &req(Command::MakeCredential, mc_params(vec![(int(6), ext)])),
+             )),
+             vec![status::CBOR_UNEXPECTED_TYPE]
+         );
+@@ -1701,7 +1957,7 @@ fn cred_protect_credential_is_never_used_without_uv() {
+     let id = register(&mut a, vec![(int(6), ext)]);
+     let signed_before = a.tpm_mut().signed.len();
+     let ga = req(
+-        cmd::GET_ASSERTION,
++        Command::GetAssertion,
+         ga_params(Some(vec![descriptor(&id)]), vec![]),
+     );
+ 
+@@ -1712,7 +1968,7 @@ fn cred_protect_credential_is_never_used_without_uv() {
+     );
+     // A silent probe never degrades into a presence-only signature either.
+     let silent = req(
+-        cmd::GET_ASSERTION,
++        Command::GetAssertion,
+         ga_params(
+             Some(vec![descriptor(&id)]),
+             vec![(int(5), Value::Map(vec![(text("up"), Value::Bool(false))]))],
+@@ -1720,7 +1976,7 @@ fn cred_protect_credential_is_never_used_without_uv() {
+     );
+     assert_eq!(
+         done(prep(&mut a, ALICE, &silent)),
+-        vec![status::UNSUPPORTED_OPTION]
++        vec![status::NO_CREDENTIALS]
+     );
+     assert_eq!(
+         a.tpm_mut().signed.len(),
+@@ -1884,7 +2140,7 @@ fn hmac_secret_input_with(p: &Platform, salts: &[u8], key: u64, value: Value) ->
+ 
+ fn hmac_assertion(id: &[u8], input: Value) -> Vec<u8> {
+     req(
+-        cmd::GET_ASSERTION,
++        Command::GetAssertion,
+         ga_params(
+             Some(vec![descriptor(id)]),
+             vec![(int(4), Value::Map(vec![(text("hmac-secret"), input)]))],
+@@ -1906,7 +2162,7 @@ fn credential_extensions(resp: &Value) -> Option<Value> {
+ #[test]
+ fn hmac_secret_is_advertised_but_prf_is_not() {
+     let mut a = auth();
+-    let info = body(&done(prep(&mut a, ALICE, &[cmd::GET_INFO])));
++    let info = body(&done(prep(&mut a, ALICE, &[Command::GetInfo.code()])));
+     let extensions = get(&info, 2).and_then(Value::as_array).unwrap();
+     assert!(extensions.contains(&text("hmac-secret")));
+     // PRF-adjacent behavior is only implemented through hmac-secret; advertising `prf`
+@@ -1923,7 +2179,7 @@ fn make_credential_hmac_secret_false_or_absent_omits_the_extension() {
+             &mut a,
+             ALICE,
+             &req(
+-                cmd::MAKE_CREDENTIAL,
++                Command::MakeCredential,
+                 mc_params(vec![(
+                     int(6),
+                     Value::Map(vec![(text("hmac-secret"), ext.clone())]),
+@@ -1941,7 +2197,7 @@ fn make_credential_hmac_secret_false_or_absent_omits_the_extension() {
+     }
+ 
+     // An absent extension means "no hmac-secret key", so no output is returned either.
+-    let step = prep(&mut a, ALICE, &req(cmd::MAKE_CREDENTIAL, mc_params(vec![])));
++    let step = prep(&mut a, ALICE, &req(Command::MakeCredential, mc_params(vec![])));
+     let resp = body(&touch(&mut a, ALICE, step));
+     assert!(credential_extensions(&resp).is_none());
+ 
+@@ -1950,7 +2206,7 @@ fn make_credential_hmac_secret_false_or_absent_omits_the_extension() {
+         &mut a,
+         ALICE,
+         &req(
+-            cmd::MAKE_CREDENTIAL,
++            Command::MakeCredential,
+             mc_params(vec![(
+                 int(6),
+                 Value::Map(vec![(text("hmac-secret"), text("true"))]),
+@@ -2097,7 +2353,7 @@ fn hmac_secret_applies_only_to_the_first_assertion() {
+             (text("name"), text("bob")),
+         ]),
+     );
+-    let step = prep(&mut a, ALICE, &req(cmd::MAKE_CREDENTIAL, params));
++    let step = prep(&mut a, ALICE, &req(Command::MakeCredential, params));
+     let second = body(&touch(&mut a, ALICE, step));
+     assert!(
+         credential_extensions(&second).is_some(),
+@@ -2109,7 +2365,7 @@ fn hmac_secret_applies_only_to_the_first_assertion() {
+         &mut a,
+         ALICE,
+         &req(
+-            cmd::GET_ASSERTION,
++            Command::GetAssertion,
+             ga_params(
+                 None,
+                 vec![(
+@@ -2128,7 +2384,7 @@ fn hmac_secret_applies_only_to_the_first_assertion() {
+     assert_eq!(auth_data[32] & 0x80, 0x80, "first assertion has extensions");
+ 
+     // CTAP 2.1 §6.3: the remaining assertions reuse the verification but carry no hmac-secret.
+-    let next = body(&done(prep(&mut a, ALICE, &[cmd::GET_NEXT_ASSERTION])));
++    let next = body(&done(prep(&mut a, ALICE, &[Command::GetNextAssertion.code()])));
+     let auth_data = get(&next, 2).and_then(Value::as_bytes).unwrap();
+     assert_eq!(auth_data[32] & 0x80, 0, "no ED flag on getNextAssertion");
+     assert_eq!(

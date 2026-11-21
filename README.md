@@ -90,10 +90,11 @@ A step-by-step guide, including optional PIN setup and local testing, is in
 
 ## Status and compatibility
 
-`vpasskey-btw` 0.1.6 is a halfway development release on the way to 0.2.0.
-It upgrades the pinned authenticator to `passkey-tpm v0.1.0-brrr1`, adds the
-polkit fingerprint
-prompt, retries, a configurable verification timeout, and safer installers. See
+`vpasskey-btw` 0.1.7 is a halfway development release on the way to 0.2.0.
+It adds the polkit fingerprint prompt, retries, a configurable verification
+timeout, and safer installers. `develop` pins the QA fork tag
+`passkey-tpm v0.1.0-brrr2` (`d8acb31`), which carries the local patch series and
+the cherry-picked upstream Firefox `allowList`/stale-prompt fix. See
 [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 Verified on the reference Omarchy machine in Chrome and Chromium:

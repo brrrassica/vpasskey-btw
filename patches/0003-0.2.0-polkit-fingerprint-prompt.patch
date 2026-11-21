@@ -1,8 +1,8 @@
 diff --git a/crates/agent/src/main.rs b/crates/agent/src/main.rs
-index 74db093..c94fcd7 100644
+index 6da7899..119cd68 100644
 --- a/crates/agent/src/main.rs
 +++ b/crates/agent/src/main.rs
-@@ -282,9 +282,16 @@ fn open_device(
+@@ -320,9 +320,16 @@ fn open_device(
      Ok(writer)
  }
  
@@ -21,7 +21,7 @@ index 74db093..c94fcd7 100644
      match backend {
          prompt::Backend::Terminal => {
              eprintln!("Touch the fingerprint reader to continue with {rp}");
-@@ -294,7 +301,7 @@ fn prompt_user(backend: prompt::Backend, rp: String, notes: &std_mpsc::Sender<No
+@@ -332,7 +339,7 @@ fn prompt_user(backend: prompt::Backend, rp: String, notes: &std_mpsc::Sender<No
          }
          prompt::Backend::Native | prompt::Backend::Polkit => {
              eprintln!(
@@ -179,7 +179,7 @@ index 46690a3..49dd0fa 100644
  
      #[test]
 diff --git a/crates/core/src/evidence.rs b/crates/core/src/evidence.rs
-index 2d89556..7df11af 100644
+index 0e09f07..38d7188 100644
 --- a/crates/core/src/evidence.rs
 +++ b/crates/core/src/evidence.rs
 @@ -1,8 +1,10 @@
@@ -196,7 +196,7 @@ index 2d89556..7df11af 100644
  //! exactly when evidence is present, and that evidence always selects a UV gate, so the TPM
  //! policy and the flags in the signed data can't disagree.
  
-@@ -23,6 +25,10 @@ pub const FLAG_ED: u8 = 0x80;
+@@ -33,6 +35,10 @@ pub enum Presence {
  pub enum UvMethod {
      /// fprintd reported `verify-match` in this request.
      Fingerprint,
@@ -207,7 +207,7 @@ index 2d89556..7df11af 100644
      /// A valid pinUvAuthParam on a token with `userVerified` (PIN or earlier fingerprint).
      PinUvAuthToken,
  }
-@@ -48,6 +54,16 @@ impl UvEvidence {
+@@ -58,6 +64,16 @@ impl UvEvidence {
          UvEvidence { uid, method: UvMethod::Fingerprint }
      }
  
@@ -224,9 +224,9 @@ index 2d89556..7df11af 100644
      /// Call **only** after verifying a pinUvAuthParam against a token issued to `uid` with
      /// `userVerified` set.
      pub fn from_token(uid: u32) -> (ev: Self)
-@@ -152,6 +168,10 @@ mod tests {
-         let ad = auth_data(&[7; 32], &ev, None, Some(&[0xa0]));
-         assert_eq!(ad[32], FLAG_UP | FLAG_UV | FLAG_ED);
+@@ -177,6 +193,10 @@ mod tests {
+         let ad = auth_data(&[7; 32], &ev, Presence::Silent, None, None);
+         assert_eq!(ad[32], FLAG_UV);
          assert_eq!(UvEvidence::from_token(5).method(), UvMethod::PinUvAuthToken);
 +        let polkit = UvEvidence::from_polkit_authorization(1000);
 +        assert_eq!(polkit.method(), UvMethod::Polkit);
@@ -444,7 +444,7 @@ index 0000000..2f42089
 +    }
 +}
 diff --git a/crates/uvd/src/lib.rs b/crates/uvd/src/lib.rs
-index ba0c28f..59434b1 100644
+index c08efca..5525d56 100644
 --- a/crates/uvd/src/lib.rs
 +++ b/crates/uvd/src/lib.rs
 @@ -2,10 +2,12 @@
@@ -658,7 +658,7 @@ index 5579bfc..803d98a 100644
      if let Err(e) = serve(&conn, broker).await {
          eprintln!("cannot export the broker: {e}");
 diff --git a/crates/uvd/tests/broker.rs b/crates/uvd/tests/broker.rs
-index 7a5e729..065687b 100644
+index 781d55a..12b0e9d 100644
 --- a/crates/uvd/tests/broker.rs
 +++ b/crates/uvd/tests/broker.rs
 @@ -106,6 +106,8 @@ async fn fixture_with(mock_fprintd: MockFprintd, sessions: Box<dyn SessionPolicy

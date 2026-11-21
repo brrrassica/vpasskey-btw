@@ -8,12 +8,20 @@ upstream pin from [`versions.env`](../versions.env):
 3. Commit the result in the checkout so the next install's dirty-tree guard still sees a
    clean working tree. The files here, not that local commit, are the source of truth.
 
-The pin (`v0.1.0-brrr1`) already contains patches 0001–0003, so `install.sh`
-checks a per-patch marker and skips only the patches already in the tree. Patches
-0004–0007 are newer than the pin and are applied on top of it. The series
-remains the reference for older pristine pins, and the pin itself still keeps
-its SHA integrity check. When you add a patch, add its marker check to the
-`patch_marker` function in [`install.sh`](../install.sh:189) and list it here.
+The pin is `brrrassica/passkey-tpm v0.1.0-brrr2` (see
+[`versions.env`](../versions.env)). That fork tag already carries the local
+series and the cherry-picked upstream Firefox/prompt fix, so every marker below
+is present and `install.sh` skips all seven patches on the default pin. The
+files are kept as the reference series for the earlier upstream pin; a custom
+pin that lacks a marker still needs matching, refreshed patches. The pin itself
+keeps its SHA integrity check. When you add a patch, add its marker check to the
+`patch_marker` function in [`install.sh`](../install.sh) and list it here.
+
+The earlier series was refreshed against upstream `83e689c`. Conflicts were
+resolved in favor of local patch behavior, with the code adapted to the new
+`Command` enum, `Presence` handling, and tokio note channel. The fork tag keeps
+those semantics and adds the upstream fix: tokenless silent probes return
+`NO_CREDENTIALS`, while empty allowLists remain discoverable.
 
 ## Current series
 

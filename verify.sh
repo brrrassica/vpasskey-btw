@@ -48,14 +48,14 @@ case "${1:-}" in
 		;;
 	--prompt)
 		echo "== prompt backend =="
-		prompt_probe
+		prompt_probe || exit 1
 		exit 0
 		;;
 	--compat)
 		echo "Open this page in Chrome/Chromium and Firefox:"
 		echo "  $ROOT/browser-test-compat.html"
 		echo "Serve it locally if your browser blocks file:// WebAuthn:"
-		echo "  python3 -m http.server --directory $ROOT 8000"
+		printf '  python3 -m http.server --directory %q 8000\n' "$ROOT"
 		echo "  then open http://localhost:8000/browser-test-compat.html"
 		exit 0
 		;;
@@ -85,9 +85,21 @@ echo "== info =="
 passkey-tpm info || true
 
 if [[ "${1:-}" == "--bio" ]]; then
+	# The e2e driver lives in the nested source checkout. Refuse to use it
+	# against an installed binary from a different pin, which would test a
+	# mixture of two builds.
+	driver="$ROOT/passkey-tpm/scripts/e2e-fido2.sh"
+	[[ -x "$driver" ]] || { echo "error: missing $driver; run ./install.sh first" >&2; exit 1; }
+	checkout_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/passkey-tpm/Cargo.toml" | head -n 1)"
+	installed_version="$(/usr/bin/passkey-tpm version 2>/dev/null | awk '{print $2}' || true)"
+	if [[ -n "$checkout_version" && "$installed_version" != "$checkout_version" ]]; then
+		echo "error: installed passkey-tpm is ${installed_version:-missing}; checkout is $checkout_version" >&2
+		echo "Run ./install.sh before --bio so the e2e driver matches the installed binary." >&2
+		exit 1
+	fi
 	echo
 	echo "Starting biometric e2e: touch the fingerprint reader when asked."
-	exec "$ROOT/passkey-tpm/scripts/e2e-fido2.sh"
+	exec "$driver"
 fi
 
 echo

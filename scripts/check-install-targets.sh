@@ -64,11 +64,17 @@ done
 
 (( $# > 0 )) || die "no destination paths given"
 
-# Unique parent directories, in a stable order.
+# Every ancestor directory of the destinations, not just the immediate parent.
+# A file is only as trustworthy as the whole chain that leads to it.
 parent_dirs() {
-	local dest
+	local dest parent
 	for dest in "$@"; do
-		dirname -- "$dest"
+		parent="$(dirname -- "$dest")"
+		while [[ -n "$parent" && "$parent" != "/" && "$parent" != "." ]]; do
+			printf '%s\n' "$parent"
+			parent="$(dirname -- "$parent")"
+		done
+		printf '/\n'
 	done | sort -u
 }
 
@@ -76,9 +82,9 @@ state_of() {
 	local dir
 	while IFS= read -r dir; do
 		if [[ -d "$dir" ]]; then
-			stat -c '%n %u %g %a' -- "$dir"
+			stat -c '%u %g %a %n' -- "$dir"
 		else
-			printf '%s missing missing missing\n' "$dir"
+			printf 'missing missing missing %s\n' "$dir"
 		fi
 	done < <(parent_dirs "$@")
 }
@@ -104,7 +110,7 @@ check)
 			bad=1
 			continue
 		fi
-		read -r _ uid gid mode < <(stat -c '%n %u %g %a' -- "$dir")
+		read -r uid gid mode < <(stat -c '%u %g %a' -- "$dir")
 		if [[ "$uid" != "0" || "$gid" != "0" ]]; then
 			printf '%s is owned by uid %s gid %s, expected root:root\n' \
 				"$dir" "$uid" "$gid" >&2
