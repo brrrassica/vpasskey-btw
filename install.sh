@@ -90,8 +90,8 @@ if (( SHOW_VERSION )); then
 	exit 0
 fi
 
-# REF is normally a tag like v0.1.0-brrr1; strip the leading v for comparing
-# with `passkey-tpm version`.
+# REF is normally a version tag like v0.1.0-beta.3; strip the leading v for
+# comparing with `passkey-tpm version`.
 TARGET_VERSION="${REF#v}"
 
 patch_files() {

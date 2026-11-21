@@ -8,12 +8,20 @@ upstream pin from [`versions.env`](../versions.env):
 3. Commit the result in the checkout so the next install's dirty-tree guard still sees a
    clean working tree. The files here, not that local commit, are the source of truth.
 
-The pin (`v0.1.0-brrr1`) already contains patches 0001–0003, so `install.sh`
-checks a per-patch marker and skips only the patches already in the tree. Patches
-0004–0007 are newer than the pin and are applied on top of it. The series
-remains the reference for older pristine pins, and the pin itself still keeps
-its SHA integrity check. When you add a patch, add its marker check to the
-`patch_marker` function in [`install.sh`](../install.sh:189) and list it here.
+The pin is upstream `v0.1.0-beta.3` (see [`versions.env`](../versions.env)), so
+`install.sh` applies the whole series on a fresh checkout. Each patch still has
+its own marker check: a future pin that already contains part of the series
+will skip only those patches. The pin itself keeps its SHA integrity check. When
+you add a patch, add its marker check to the `patch_marker` function in
+[`install.sh`](../install.sh:252) and list it here.
+
+The series was refreshed against upstream `83e689c` after the zbus 6, desktop,
+workspace-dependency and Firefox silent-probe changes. Conflicts were resolved
+in favor of the local patch behavior, with the local code adapted to the new
+`Command` enum, `Presence` handling, and tokio note channel. The
+`cred_protect_credential_is_never_used_without_uv` test now expects
+`NO_CREDENTIALS` for a silent probe without a token, matching upstream's
+fail-closed probe semantics.
 
 ## Current series
 

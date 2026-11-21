@@ -1,8 +1,8 @@
 diff --git a/crates/core/src/ctap2/get_assertion.rs b/crates/core/src/ctap2/get_assertion.rs
-index 22fd49d..d327f35 100644
+index 3033ad2..e862e67 100644
 --- a/crates/core/src/ctap2/get_assertion.rs
 +++ b/crates/core/src/ctap2/get_assertion.rs
-@@ -129,23 +129,27 @@ impl<T: TpmOps> Authenticator<T> {
+@@ -153,23 +153,27 @@ impl<T: TpmOps> Authenticator<T> {
              if ids.len() > MAX_CREDENTIAL_COUNT_IN_LIST {
                  return Err(status::LIMIT_EXCEEDED);
              }
@@ -46,7 +46,7 @@ index 22fd49d..d327f35 100644
          let entries = self.tpm.resident_entries(uid).map_err(map_tpm_error)?;
          let mut found = Vec::new();
 diff --git a/crates/core/src/ctap2/tests.rs b/crates/core/src/ctap2/tests.rs
-index 34e59b6..9f4bd3d 100644
+index 097b046..5cd2cd9 100644
 --- a/crates/core/src/ctap2/tests.rs
 +++ b/crates/core/src/ctap2/tests.rs
 @@ -16,7 +16,7 @@ use crate::tpm_iface::{CredBlobs, CredProtect, ResidentEntry, RpIdHash, TpmError
@@ -58,7 +58,7 @@ index 34e59b6..9f4bd3d 100644
  struct MockTpm {
      created: u32,
      signed: Vec<(Uid, GateKind, [u8; 32])>,
-@@ -675,9 +675,10 @@ fn errors_and_outcomes() {
+@@ -682,9 +682,10 @@ fn errors_and_outcomes() {
  }
  
  #[test]
@@ -70,7 +70,7 @@ index 34e59b6..9f4bd3d 100644
      let step = prep(
          &mut a,
          ALICE,
-@@ -686,10 +687,18 @@ fn exclude_list_is_honoured() {
+@@ -693,10 +694,18 @@ fn exclude_list_is_honoured() {
              mc_params(vec![(int(5), Value::Array(vec![descriptor(&id)]))]),
          ),
      );
@@ -90,27 +90,32 @@ index 34e59b6..9f4bd3d 100644
  }
  
  // ---------------------------------------------------------------- clientPIN
-@@ -1264,10 +1273,16 @@ fn discoverable_credentials_multiple_accounts_and_next_assertion() {
+@@ -1355,14 +1364,16 @@ fn discoverable_credentials_multiple_accounts_and_next_assertion() {
      let resp = body(&touch(&mut a, ALICE, step));
      assert_eq!(get(&resp, 5), Some(&Value::Uint(2)), "numberOfCredentials");
      assert!(get_text(get(&resp, 4).unwrap(), "id").is_some());
 -    let mut all = vec![get_text(get(&resp, 1).unwrap(), "id").unwrap().clone()];
+-    let next = body(&done(prep(
+-        &mut a,
+-        ALICE,
+-        &[Command::GetNextAssertion.code()],
+-    )));
+-    all.push(get_text(get(&next, 1).unwrap(), "id").unwrap().clone());
+-    assert!(all.contains(&Value::Bytes(first)) && all.contains(&Value::Bytes(second)));
 +    // Most recent first: the second credential (same `created` second or newer).
 +    assert_eq!(
 +        get_text(get(&resp, 1).unwrap(), "id"),
 +        Some(&Value::Bytes(second.clone()))
 +    );
-     let next = body(&done(prep(&mut a, ALICE, &[cmd::GET_NEXT_ASSERTION])));
--    all.push(get_text(get(&next, 1).unwrap(), "id").unwrap().clone());
--    assert!(all.contains(&Value::Bytes(first)) && all.contains(&Value::Bytes(second)));
++    let next = body(&done(prep(&mut a, ALICE, &[cmd::GET_NEXT_ASSERTION])));
 +    assert_eq!(
 +        get_text(get(&next, 1).unwrap(), "id"),
 +        Some(&Value::Bytes(first.clone()))
 +    );
      assert_eq!(
-         done(prep(&mut a, ALICE, &[cmd::GET_NEXT_ASSERTION])),
+         done(prep(&mut a, ALICE, &[Command::GetNextAssertion.code()])),
          vec![status::NOT_ALLOWED],
-@@ -1297,6 +1312,175 @@ fn same_user_and_rp_replaces_the_discoverable_credential() {
+@@ -1392,6 +1403,175 @@ fn same_user_and_rp_replaces_the_discoverable_credential() {
      assert_eq!(entries[0].credential_id, second);
  }
  

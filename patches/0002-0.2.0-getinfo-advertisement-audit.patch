@@ -1,8 +1,8 @@
 diff --git a/crates/core/src/ctap2/common.rs b/crates/core/src/ctap2/common.rs
-index 29d1f12..0baccaf 100644
+index f71f0ff..95398d5 100644
 --- a/crates/core/src/ctap2/common.rs
 +++ b/crates/core/src/ctap2/common.rs
-@@ -55,9 +55,15 @@ pub mod status {
+@@ -116,9 +116,15 @@ pub mod status {
  
  /// AAGUID: all zero (packed self-attestation identifies no model; no tracking ID).
  pub const AAGUID: [u8; 16] = [0; 16];
@@ -154,22 +154,24 @@ index 84b2d7a..12bf64f 100644
 +    }
 +}
 diff --git a/crates/core/src/ctap2/tests.rs b/crates/core/src/ctap2/tests.rs
-index a6eb2ac..1c3ebbe 100644
+index 91a5b1e..03c508a 100644
 --- a/crates/core/src/ctap2/tests.rs
 +++ b/crates/core/src/ctap2/tests.rs
-@@ -4,7 +4,10 @@ use passkey_tpm_wire::cbor::{self, Value};
+@@ -4,8 +4,11 @@ use passkey_tpm_wire::cbor::{self, Value};
  use passkey_tpm_wire::credid::KeyBlobs;
  use proptest::prelude::*;
  
--use super::common::{cmd, get, get_text, int, sha256, status, text, AAGUID, MAX_UV_RETRIES};
+-use super::common::{get, get_text, int, sha256, status, text, AAGUID, MAX_UV_RETRIES};
+-use super::{Authenticator, Command, Step, UserInfo, UvOutcome};
 +use super::common::{
 +    cmd, get, get_text, int, sha256, status, text, AAGUID, MAX_CREDENTIAL_COUNT_IN_LIST,
 +    MAX_MSG_SIZE, MAX_UV_RETRIES,
 +};
- use super::{Authenticator, Step, UserInfo, UvOutcome};
++use super::{Authenticator, Step, UserInfo, UvOutcome};
  use crate::evidence::UvEvidence;
  use crate::gates::GateKind;
-@@ -449,6 +452,135 @@ fn get_info_advertises_ctap_2_1() {
+ use crate::pin_protocol::{parse_platform_key, KeyAgreement, Protocol, SharedSecret};
+@@ -452,6 +455,135 @@ fn get_info_advertises_ctap_2_1() {
      );
  }
  

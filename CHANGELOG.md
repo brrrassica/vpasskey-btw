@@ -9,6 +9,20 @@ The tested browser and site status is not repeated here. See
 [plans/towards-0.2.0.md](plans/towards-0.2.0.md) for the release plan and open
 items.
 
+## [Unreleased]
+
+### Changed
+
+- Synced the upstream authenticator pin from the `brrrassica/passkey-tpm`
+  release (`v0.1.0-brrr1`, `dc4fda7`) to upstream `dangerousplay/passkey-tpm`
+  `v0.1.0-beta.3` (`83e689c`), bringing in the Firefox silent-probe fix, zbus 6
+  desktop code, workspace dependency cleanup, and release tooling.
+- Refreshed all seven local patches against the new pin. Conflicts were resolved
+  in favor of the local patch behavior, with the code adapted to upstream's
+  `Command` enum, `Presence` handling, and tokio note channel. The local
+  credProtect test now expects `NO_CREDENTIALS` for a tokenless silent probe,
+  matching upstream's fail-closed semantics.
+
 ## [0.1.6] — 2026-11-05
 
 Patch release on top of 0.1.5-fix, carrying the develop fixes into the release
