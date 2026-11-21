@@ -104,7 +104,7 @@ check)
 			bad=1
 			continue
 		fi
-		read -r _ uid gid mode < <(stat -c '%n %u %g %a' -- "$dir")
+		read -r uid gid mode < <(stat -c '%u %g %a' -- "$dir")
 		if [[ "$uid" != "0" || "$gid" != "0" ]]; then
 			printf '%s is owned by uid %s gid %s, expected root:root\n' \
 				"$dir" "$uid" "$gid" >&2
