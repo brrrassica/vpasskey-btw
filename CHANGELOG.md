@@ -11,6 +11,8 @@ work.
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-11-22
+
 ### Changed
 
 - Moved the authenticator pin back to the `brrrassica/passkey-tpm` QA fork as
