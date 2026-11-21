@@ -33,17 +33,17 @@ The installer will:
 
 1. Fetch the upstream authenticator (`passkey-tpm`) from `versions.env`, verify
    that the ref resolves to the pinned commit, and check out that exact commit.
-2. Ensure the local patch series in `patches/` is present (each patch is skipped
-   if a future pin already contains it).
+2. Check the local patch markers in `patches/`. They are all present in the
+   pinned fork tag, so nothing is applied on a default install.
 3. Build it with Cargo.
 4. Install its files into `/usr` with explicit `root:root` ownership and modes
    (you'll approve this with your password).
 5. Create the `passkey-tpm` service account and load the `uhid` kernel module.
 6. Start the per-user session service.
 
-The current pin is `passkey-tpm v0.1.0-beta.3` from
-[`dangerousplay/passkey-tpm`](https://github.com/dangerousplay/passkey-tpm)
-(commit `83e689c`). Keep the
+The current pin is `passkey-tpm v0.1.0-brrr2` from
+[`brrrassica/passkey-tpm`](https://github.com/brrrassica/passkey-tpm)
+(commit `d8acb31`). Keep the
 wrapper's `versions.env` as the source of truth rather than editing
 `install.sh`. For development, `PASSKEY_TPM_REPO`, `PASSKEY_TPM_REF`, and
 `PASSKEY_TPM_COMMIT` can override the pin; a custom ref without a matching

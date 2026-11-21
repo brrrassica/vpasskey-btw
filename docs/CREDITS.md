@@ -12,18 +12,19 @@ Henrique ([@dangerousplay](https://github.com/dangerousplay))**.
 - License: MIT OR Apache-2.0
 - It implements the TPM-backed virtual security key, the broker/agent split, the
   CTAP2 logic, the fprintd user verification, and the packaging files.
-- This project pins it through `versions.env`, currently upstream `main` at
-  commit `83e689c`, builds it from source, and applies the local patch series in
-  `patches/`.
+- This project pins it through `versions.env`, currently the
+  [`brrrassica` fork](https://github.com/brrrassica/passkey-tpm) tag
+  `v0.1.0-brrr2` (`d8acb31`). That tag carries the local patch series and a
+  cherry-pick of upstream's Firefox `allowList`/stale-prompt fix.
 
 If you find a bug in the passkey behaviour itself, it most likely belongs
 upstream.
 
 ## Local patches
 
-These changes are maintained here and applied by `install.sh` on top of the
-pinned upstream commit (skipped individually if a future pin already contains
-them):
+These changes are carried by the pinned fork tag. The patch files remain here
+as the reference series; `install.sh` checks their markers and skips them
+because the pin already contains them:
 
 | Patch | Purpose |
 |---|---|

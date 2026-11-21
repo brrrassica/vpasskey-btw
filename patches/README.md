@@ -8,20 +8,20 @@ upstream pin from [`versions.env`](../versions.env):
 3. Commit the result in the checkout so the next install's dirty-tree guard still sees a
    clean working tree. The files here, not that local commit, are the source of truth.
 
-The pin is upstream `v0.1.0-beta.3` (see [`versions.env`](../versions.env)), so
-`install.sh` applies the whole series on a fresh checkout. Each patch still has
-its own marker check: a future pin that already contains part of the series
-will skip only those patches. The pin itself keeps its SHA integrity check. When
-you add a patch, add its marker check to the `patch_marker` function in
-[`install.sh`](../install.sh:252) and list it here.
+The pin is `brrrassica/passkey-tpm v0.1.0-brrr2` (see
+[`versions.env`](../versions.env)). That fork tag already carries the local
+series and the cherry-picked upstream Firefox/prompt fix, so every marker below
+is present and `install.sh` skips all seven patches on the default pin. The
+files are kept as the reference series for the earlier upstream pin; a custom
+pin that lacks a marker still needs matching, refreshed patches. The pin itself
+keeps its SHA integrity check. When you add a patch, add its marker check to the
+`patch_marker` function in [`install.sh`](../install.sh:252) and list it here.
 
-The series was refreshed against upstream `83e689c` after the zbus 6, desktop,
-workspace-dependency and Firefox silent-probe changes. Conflicts were resolved
-in favor of the local patch behavior, with the local code adapted to the new
-`Command` enum, `Presence` handling, and tokio note channel. The
-`cred_protect_credential_is_never_used_without_uv` test now expects
-`NO_CREDENTIALS` for a silent probe without a token, matching upstream's
-fail-closed probe semantics.
+The earlier series was refreshed against upstream `83e689c`. Conflicts were
+resolved in favor of local patch behavior, with the code adapted to the new
+`Command` enum, `Presence` handling, and tokio note channel. The fork tag keeps
+those semantics and adds the upstream fix: tokenless silent probes return
+`NO_CREDENTIALS`, while empty allowLists remain discoverable.
 
 ## Current series
 

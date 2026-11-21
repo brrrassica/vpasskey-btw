@@ -13,15 +13,18 @@ items.
 
 ### Changed
 
-- Synced the upstream authenticator pin from the `brrrassica/passkey-tpm`
-  release (`v0.1.0-brrr1`, `dc4fda7`) to upstream `dangerousplay/passkey-tpm`
-  `v0.1.0-beta.3` (`83e689c`), bringing in the Firefox silent-probe fix, zbus 6
-  desktop code, workspace dependency cleanup, and release tooling.
-- Refreshed all seven local patches against the new pin. Conflicts were resolved
-  in favor of the local patch behavior, with the code adapted to upstream's
-  `Command` enum, `Presence` handling, and tokio note channel. The local
-  credProtect test now expects `NO_CREDENTIALS` for a tokenless silent probe,
-  matching upstream's fail-closed semantics.
+- Moved the authenticator pin back to the `brrrassica/passkey-tpm` QA fork as
+  `v0.1.0-brrr2` (`d8acb31`), based on `fork/main` instead of the old
+  `v0.1.0-brrr1` release. The upstream `dangerousplay` beta.3 pin is no longer
+  used; the zbus 6/release-tooling commits were deliberately not taken.
+- Cherry-picked upstream `d748694` onto the fork so Firefox sign-in with an
+  allowList works and stale fingerprint banners are closed. The fork's prompt
+  backends and retries were kept, the tests were adapted to `Command` and
+  `Presence`, and empty allowLists remain discoverable. Tokenless silent probes
+  now return `NO_CREDENTIALS`, matching upstream's fail-closed semantics.
+- All seven patch markers are present in the fork tag, so the default install
+  skips the archived patch series. The nested checkout now uses the fork as
+  `origin` and preserves upstream as `upstream`.
 
 ## [0.1.6] — 2026-11-05
 
