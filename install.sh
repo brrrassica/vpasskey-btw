@@ -447,7 +447,7 @@ fi
 # The contract: every managed file exists, is root-owned, and has no ACLs. The
 # staging tree belongs to the invoking user, so any named ACL or foreign owner
 # here means the install is not trustworthy.
-for dest in "${BIN_FILES[@]}" "${CONF_FILES[@]}"; do
+for dest in "${STAGED_FILES[@]}"; do
 	[[ -f "$dest" ]] || die "expected file was not installed: $dest"
 	[[ "$(stat -c '%u:%g' "$dest")" == "0:0" ]] || die "$dest is not root-owned"
 done
@@ -457,10 +457,10 @@ if command -v setfacl >/dev/null 2>&1; then
 	sudo setfacl -b -- "${STAGED_FILES[@]}"
 fi
 if command -v getfacl >/dev/null 2>&1; then
-	if sudo getfacl -pR "${TREE_PATHS[@]}" 2>/dev/null | grep -Eq '^((default:)?user:[^:]+:)'; then
+	if sudo getfacl -pR "${TREE_PATHS[@]}" 2>/dev/null | grep -Eq '^((default:)?(user|group):[^:]+:)'; then
 		die "installed tree still carries a named ACL entry; refusing to continue"
 	fi
-	if sudo getfacl -p -- "${STAGED_FILES[@]}" 2>/dev/null | grep -Eq '^((default:)?user:[^:]+:)'; then
+	if sudo getfacl -p -- "${STAGED_FILES[@]}" 2>/dev/null | grep -Eq '^((default:)?(user|group):[^:]+:)'; then
 		die "installed files still carry a named ACL entry; refusing to continue"
 	fi
 	log "Verified: installed files have no named ACL entries"
